@@ -1,17 +1,18 @@
-//
-//  SceneCoordinator.swift
-//  BrickBuilderApp
-//
-//  Created by San 金 on 2025/6/25.
-//
 import SceneKit
 import SwiftUI
 
 class SceneCoordinator: ObservableObject {
     let scene = SCNScene()
     let cameraNode = SCNNode()
+    private var groundNode: SCNNode?
     
     @Published var brickCount = 0
+    
+    // 相机缩放控制
+    private var initialCameraPosition: SCNVector3 = SCNVector3(x: 0, y: 8, z: 15)
+    private let minZoom: Float = 0.3
+    private let maxZoom: Float = 3.0
+    private var currentZoom: Float = 1.0
     
     init() {
         setupScene()
@@ -23,11 +24,15 @@ class SceneCoordinator: ObservableObject {
     // MARK: - Scene Setup
     
     private func setupScene() {
-        scene.background.contents = UIColor.systemBlue
+        scene.background.contents = [
+            UIColor.systemBlue.withAlphaComponent(0.3),
+            UIColor.white
+        ]
     }
     
     private func setupCamera() {
         cameraNode.camera = SCNCamera()
+        cameraNode.camera?.fieldOfView = 60
         cameraNode.position = SCNVector3(x: 0, y: 5, z: 10)
         cameraNode.look(at: SCNVector3(x: 0, y: 0, z: 0))
         scene.rootNode.addChildNode(cameraNode)
@@ -48,39 +53,128 @@ class SceneCoordinator: ObservableObject {
         directionalLight.color = UIColor(white: 0.8, alpha: 1.0)
         directionalLight.castsShadow = true
         directionalLight.shadowMode = .deferred
+        directionalLight.shadowSampleCount = 32
+        directionalLight.shadowRadius = 3
         let directionalLightNode = SCNNode()
         directionalLightNode.light = directionalLight
         directionalLightNode.position = SCNVector3(x: 5, y: 10, z: 5)
         directionalLightNode.look(at: SCNVector3(x: 0, y: 0, z: 0))
         scene.rootNode.addChildNode(directionalLightNode)
+        
+        // 补充光
+        let fillLight = SCNLight()
+        fillLight.type = .directional
+        fillLight.color = UIColor(white: 0.3, alpha: 1.0)
+        let fillLightNode = SCNNode()
+        fillLightNode.light = fillLight
+        fillLightNode.position = SCNVector3(x: -5, y: 8, z: -5)
+        fillLightNode.look(at: SCNVector3(x: 0, y: 0, z: 0))
+        scene.rootNode.addChildNode(fillLightNode)
+    }
+    
+    private func setupPhysicsWorld() {
+        scene.physicsWorld.gravity = SCNVector3(0, -9.8, 0)
     }
     
     private func setupGround() {
-        // 创建地面几何体
-        let groundGeometry = SCNPlane(width: 20, height: 20)
+        updateGround(width: 8, length: 8, color: .gray)
+    }
+    
+    // MARK: - Ground Management
+    public func updateGround(width: Int, length: Int, color: GroundColor) {
+        // 移除现有地面
+        groundNode?.removeFromParentNode()
         
-        // 创建地面材质
-        let groundMaterial = SCNMaterial()
-        groundMaterial.diffuse.contents = UIColor.lightGray
-        groundMaterial.specular.contents = UIColor.white
-        groundGeometry.materials = [groundMaterial]
+        // 创建新的砖块地面
+        groundNode = createBaseplate(width: width, length: length, color: color)
+        scene.rootNode.addChildNode(groundNode!)
+    }
+    
+    private func createBaseplate(width: Int, length: Int, color: GroundColor) -> SCNNode {
+        let studSize: CGFloat = 0.8
+        let plateHeight: CGFloat = 0.6
+        let plateWidth = CGFloat(width) * studSize
+        let plateLength = CGFloat(length) * studSize
         
-        // 创建地面节点
-        let groundNode = SCNNode(geometry: groundGeometry)
-        groundNode.rotation = SCNVector4(x: 1, y: 0, z: 0, w: -Float.pi / 2) // 旋转90度使其水平
-        groundNode.position = SCNVector3(x: 0, y: -1, z: 0)
+        let plateGeometry = SCNBox(width: plateWidth, height: plateHeight, length: plateLength, chamferRadius: 0.05)
+        let plateMaterial = SCNMaterial()
+        plateMaterial.diffuse.contents = color.uiColor
+        plateMaterial.specular.contents = UIColor.white
+        plateGeometry.materials = [plateMaterial]
         
-        // 添加物理体（可选，用于碰撞检测）
-        groundNode.physicsBody = SCNPhysicsBody(type: .static, shape: nil)
-        groundNode.physicsBody?.restitution = 0.2
+        let plateNode = SCNNode(geometry: plateGeometry)
+        plateNode.position = SCNVector3(x: 0, y: -Float(plateHeight/2), z: 0)
         
-        scene.rootNode.addChildNode(groundNode)
+        // 添加柱子网格
+        addStudsToBaseplate(plateNode, width: width, length: length, color: color, plateHeight: plateHeight)
+                
+        // 添加物理体
+        plateNode.physicsBody = SCNPhysicsBody(type: .static, shape: nil)
+        plateNode.physicsBody?.restitution = 0.1
+        plateNode.physicsBody?.friction = 0.9
+                
+        
+        return plateNode
+    }
+    
+    private func addStudsToBaseplate(_ plateNode: SCNNode, width: Int, length: Int, color: GroundColor, plateHeight: CGFloat) {
+        let studRadius: CGFloat = 0.25
+        let studHeight: CGFloat = 0.15
+        let studSpacing: CGFloat = 0.8
+        
+        let startX = -CGFloat(width - 1) * studSpacing / 2
+        let startZ = -CGFloat(length - 1) * studSpacing / 2
+        
+        for row in 0..<length {
+            for col in 0..<width {
+                // 外圈圆柱
+                let outerStudGeometry = SCNCylinder(radius: studRadius, height: studHeight)
+                let studMaterial = SCNMaterial()
+                studMaterial.diffuse.contents = color.uiColor
+                studMaterial.specular.contents = UIColor.white
+                outerStudGeometry.materials = [studMaterial]
+                
+                let studNode = SCNNode(geometry: outerStudGeometry)
+                studNode.position = SCNVector3(
+                    x: Float(startX + CGFloat(col) * studSpacing),
+                    y: Float(plateHeight / 2 + studHeight / 2),
+                    z: Float(startZ + CGFloat(row) * studSpacing)
+                )
+                
+                // 内圈圆柱
+                let innerStudGeometry = SCNCylinder(radius: studRadius * 0.6, height: studHeight + 0.02)
+                let innerStudMaterial = SCNMaterial()
+                innerStudMaterial.diffuse.contents = UIColor.clear
+                innerStudGeometry.materials = [innerStudMaterial]
+                               
+                plateNode.addChildNode(studNode)
+            }
+        }
+        
+    }
+    
+    // MARK: - Camera Control
+    func handleZoom(_ scale: CGFloat) {
+        
+        let newZoom = currentZoom * Float(scale)
+        let clampedZoom = max(minZoom, min(maxZoom, newZoom))
+        
+        let scaleFactor = clampedZoom / currentZoom
+        let currentPosition = cameraNode.position
+        let direction = SCNVector3(
+            x: currentPosition.x * scaleFactor,
+            y: currentPosition.y * scaleFactor,
+            z: currentPosition.z * scaleFactor
+        )
+                
+        cameraNode.position = direction
+        currentZoom = clampedZoom
+        
     }
     
     // MARK: - Brick Creation
-    
-    func addLegoBrick() {
-        let brick = createLegoBrick()
+    func addBrick() {
+        let brick = createBrick()
         
         // 随机位置放置砖块
         let x = Float.random(in: -3...3)
@@ -99,39 +193,41 @@ class SceneCoordinator: ObservableObject {
         addDropAnimation(to: brick)
     }
     
-    private func createLegoBrick() -> SCNNode {
+    private func createBrick() -> SCNNode {
         // 主要砖块体 (2x2x1 尺寸)
-        let brickWidth: CGFloat = 2.0   // 2个单位宽度
-        let brickLength: CGFloat = 2.0  // 2个单位长度
-        let brickHeight: CGFloat = 1.0  // 1个单位高度
+        let brickWidth: CGFloat = 1.6
+        let brickLength: CGFloat = 1.6
+        let brickHeight: CGFloat = 0.92
         
-        let brickGeometry = SCNBox(width: brickWidth, height: brickHeight, length: brickLength, chamferRadius: 0.1)
+        let brickGeometry = SCNBox(width: brickWidth, height: brickHeight, length: brickLength, chamferRadius: 0.08)
         
         // 砖块材质
         let brickMaterial = SCNMaterial()
         brickMaterial.diffuse.contents = randomBrickColor()
         brickMaterial.specular.contents = UIColor.white
         brickMaterial.shininess = 0.8
+        brickMaterial.roughness.contents = 0.2
         brickGeometry.materials = [brickMaterial]
         
         let brickNode = SCNNode(geometry: brickGeometry)
         
-        // 添加顶部的连接柱 (2x2 = 4个柱子)
-        addStudsToBrick(brickNode, rows: 2, columns: 2, brickHeight: brickHeight)
-        
+        addStudsToBrick(brickNode, rows: 2, columns: 2, brickHeight: brickHeight, brickColor: brickMaterial.diffuse.contents as! UIColor)
+        addHollowBottomToBrick(brickNode, brickHeight: brickHeight)
+                
+                
         // 添加物理体
         brickNode.physicsBody = SCNPhysicsBody(type: .dynamic, shape: nil)
-        brickNode.physicsBody?.restitution = 0.3
+        brickNode.physicsBody?.restitution = 0.2
         brickNode.physicsBody?.friction = 0.8
-        brickNode.physicsBody?.mass = 1.0
+        brickNode.physicsBody?.mass = 0.5
         
         return brickNode
     }
     
-    private func addStudsToBrick(_ brickNode: SCNNode, rows: Int, columns: Int, brickHeight: CGFloat) {
-        let studRadius: CGFloat = 0.15
-        let studHeight: CGFloat = 0.2
-        let spacing: CGFloat = 1.0 // 柱子之间的间距
+    private func addStudsToBrick(_ brickNode: SCNNode, rows: Int, columns: Int, brickHeight: CGFloat, brickColor: UIColor) {
+        let studRadius: CGFloat = 0.24
+        let studHeight: CGFloat = 0.18
+        let spacing: CGFloat = 0.8
         
         // 计算起始偏移量，使柱子居中
         let startX = -CGFloat(columns - 1) * spacing / 2
@@ -139,50 +235,92 @@ class SceneCoordinator: ObservableObject {
         
         for row in 0..<rows {
             for col in 0..<columns {
-                // 创建连接柱几何体
-                let studGeometry = SCNCylinder(radius: studRadius, height: studHeight)
+                // 外圈圆柱
+                let outerStudGeometry = SCNCylinder(radius: studRadius, height: studHeight)
                 let studMaterial = SCNMaterial()
-                studMaterial.diffuse.contents = brickNode.geometry?.materials.first?.diffuse.contents
-                studGeometry.materials = [studMaterial]
+                studMaterial.diffuse.contents = brickColor
+                studMaterial.specular.contents = UIColor.white
+                studMaterial.shininess = 0.8
+                outerStudGeometry.materials = [studMaterial]
                 
-                let studNode = SCNNode(geometry: studGeometry)
+                let studNode = SCNNode(geometry: outerStudGeometry)
                 studNode.position = SCNVector3(
                     x: Float(startX + CGFloat(col) * spacing),
                     y: Float(brickHeight / 2 + studHeight / 2),
                     z: Float(startZ + CGFloat(row) * spacing)
                 )
                 
+                // 内部hollow圆柱
+                let innerStudGeometry = SCNCylinder(radius: studRadius * 0.7, height: studHeight + 0.02)
+                let innerStudMaterial = SCNMaterial()
+                innerStudMaterial.diffuse.contents = UIColor.clear
+                innerStudMaterial.transparency = 0.0
+                innerStudGeometry.materials = [innerStudMaterial]
+                
+                let innerStudNode = SCNNode(geometry: innerStudGeometry)
+                innerStudNode.position = SCNVector3(x: 0, y: 0, z: 0)
+                
+                studNode.addChildNode(innerStudNode)
                 brickNode.addChildNode(studNode)
             }
         }
     }
     
-    private func randomBrickColor() -> UIColor {
-        let colors: [UIColor] = [
-            .systemRed,
-            .systemBlue,
-            .systemGreen,
-            .systemYellow,
-            .systemOrange,
-            .systemPurple,
-            .white,
-            .black
+    private func addHollowBottomToBrick(_ brickNode: SCNNode, brickHeight: CGFloat) {
+        // 在砖块底部添加hollow结构，用于连接其他砖块
+        let tubeRadius: CGFloat = 0.2
+        let tubeHeight: CGFloat = 0.3
+        
+        let positions = [
+            SCNVector3(x: -0.4, y: -Float(brickHeight/2 - tubeHeight/2), z: -0.4),
+            SCNVector3(x: 0.4, y: -Float(brickHeight/2 - tubeHeight/2), z: -0.4),
+            SCNVector3(x: -0.4, y: -Float(brickHeight/2 - tubeHeight/2), z: 0.4),
+            SCNVector3(x: 0.4, y: -Float(brickHeight/2 - tubeHeight/2), z: 0.4)
         ]
-        return colors.randomElement() ?? .systemRed
+        
+        for position in positions {
+            let tubeGeometry = SCNCylinder(radius: tubeRadius, height: tubeHeight)
+            let tubeMaterial = SCNMaterial()
+            tubeMaterial.diffuse.contents = brickNode.geometry?.materials.first?.diffuse.contents
+            tubeGeometry.materials = [tubeMaterial]
+            
+            let tubeNode = SCNNode(geometry: tubeGeometry)
+            tubeNode.position = position
+            
+            brickNode.addChildNode(tubeNode)
+        }
+    }
+    
+    private func randomBrickColor() -> UIColor {
+        // 随机的乐高砖块颜色
+        let colors: [UIColor] = [
+            UIColor(red: 0.8, green: 0.1, blue: 0.1, alpha: 1.0),
+            UIColor(red: 0.1, green: 0.4, blue: 0.8, alpha: 1.0),
+            UIColor(red: 0.2, green: 0.7, blue: 0.2, alpha: 1.0),
+            UIColor(red: 1.0, green: 0.8, blue: 0.0, alpha: 1.0),
+            UIColor(red: 1.0, green: 0.5, blue: 0.0, alpha: 1.0),
+            UIColor(red: 0.6, green: 0.3, blue: 0.8, alpha: 1.0),
+            UIColor(red: 0.9, green: 0.9, blue: 0.9, alpha: 1.0),
+            UIColor(red: 0.2, green: 0.2, blue: 0.2, alpha: 1.0)
+        ]
+        return colors.randomElement() ?? UIColor.systemRed
     }
     
     private func addDropAnimation(to node: SCNNode) {
         // 创建掉落动画
-        let dropAction = SCNAction.move(to: SCNVector3(node.position.x, 0, node.position.z), duration: 1.0)
+        let targetY: Float = 0.5
+        let dropAction = SCNAction.move(to: SCNVector3(node.position.x, targetY, node.position.z), duration: 1.2)
         dropAction.timingMode = .easeIn
         
         // 添加弹跳效果
-        let bounceAction = SCNAction.sequence([
-            SCNAction.move(by: SCNVector3(0, 0.3, 0), duration: 0.1),
-            SCNAction.move(by: SCNVector3(0, -0.3, 0), duration: 0.1)
-        ])
+        let bounceUp = SCNAction.move(by: SCNVector3(0, 0.1, 0), duration: 0.1)
+        let bounceDown = SCNAction.move(by: SCNVector3(0, -0.1, 0), duration: 0.1)
+        bounceUp.timingMode = .easeOut
+        bounceDown.timingMode = .easeIn
         
-        let completeAction = SCNAction.sequence([dropAction, bounceAction])
+        let bounceSequence = SCNAction.sequence([bounceUp, bounceDown])
+        let completeAction = SCNAction.sequence([dropAction, bounceSequence])
+        
         node.runAction(completeAction)
     }
 }

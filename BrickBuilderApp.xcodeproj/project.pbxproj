@@ -30,11 +30,6 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		389189DF2E0B1B2700E0FC0E /* BrickBuilderApp */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = BrickBuilderApp;
-			sourceTree = "<group>";
-		};
 		389189ED2E0B1B2900E0FC0E /* BrickBuilderAppTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = BrickBuilderAppTests;
@@ -43,6 +38,11 @@
 		389189F72E0B1B2900E0FC0E /* BrickBuilderAppUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = BrickBuilderAppUITests;
+			sourceTree = "<group>";
+		};
+		38CCD7742E0FD5BD002D8981 /* BrickBuilderApp */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = BrickBuilderApp;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -75,7 +75,7 @@
 		389189D42E0B1B2700E0FC0E = {
 			isa = PBXGroup;
 			children = (
-				389189DF2E0B1B2700E0FC0E /* BrickBuilderApp */,
+				38CCD7742E0FD5BD002D8981 /* BrickBuilderApp */,
 				389189ED2E0B1B2900E0FC0E /* BrickBuilderAppTests */,
 				389189F72E0B1B2900E0FC0E /* BrickBuilderAppUITests */,
 				389189DE2E0B1B2700E0FC0E /* Products */,
@@ -108,7 +108,7 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				389189DF2E0B1B2700E0FC0E /* BrickBuilderApp */,
+				38CCD7742E0FD5BD002D8981 /* BrickBuilderApp */,
 			);
 			name = BrickBuilderApp;
 			packageProductDependencies = (

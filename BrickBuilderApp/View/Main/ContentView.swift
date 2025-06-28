@@ -4,6 +4,7 @@ import SceneKit
 struct ContentView: View {
     @StateObject private var sceneCoordinator = SceneCoordinator()
     @State private var showingGroundSettings = false
+    @State private var showingBrickSettings = false
     
     var body: some View {
         ZStack {
@@ -22,8 +23,39 @@ struct ContentView: View {
             
             // UI 控件
             VStack {
+                // 顶部砖块选择区域
+                HStack {
+                    VStack {
+                        HStack {
+                            Text("积木搭建器")
+                                .font(.title2)
+                                .fontWeight(.bold)
+                                .foregroundColor(.white)
+                                .padding()
+                                .background(Color.black.opacity(0.6))
+                                .cornerRadius(10)
+                            
+                            Spacer()
+                            
+                            Text("砖块数: \(sceneCoordinator.brickCount)")
+                                .font(.caption)
+                                .foregroundColor(.white)
+                                .padding(8)
+                                .background(Color.black.opacity(0.6))
+                                .cornerRadius(8)
+                        }
+                        
+                        // 砖块调色板
+                        BrickPaletteView(sceneCoordinator: sceneCoordinator)
+                            .padding(.top, 5)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 10)
+                
                 Spacer()
                 
+                // 底部按钮
                 HStack {
                     // 地面设置按钮
                     Button(action: {
@@ -41,15 +73,15 @@ struct ContentView: View {
                     
                     Spacer()
                     
-                    // 添加砖块按钮
+                    // 砖块设置按钮
                     Button(action: {
-                        sceneCoordinator.addBrick()
+                        showingBrickSettings = true
                     }) {
-                        Image(systemName: "plus")
+                        Image(systemName: "cube.box")
                             .font(.title2)
                             .foregroundColor(.white)
                             .frame(width: 60, height: 60)
-                            .background(Color.blue)
+                            .background(Color.orange)
                             .clipShape(Circle())
                             .shadow(radius: 5)
                     }
@@ -57,35 +89,12 @@ struct ContentView: View {
                 }
                 .padding(.bottom, 50)
             }
-            
-            // 顶部信息栏
-            VStack {
-                HStack {
-                    Text("积木搭建器")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .foregroundColor(.white)
-                        .padding()
-                        .background(Color.black.opacity(0.6))
-                        .cornerRadius(10)
-                    
-                    Spacer()
-                    
-                    Text("砖块数: \(sceneCoordinator.brickCount)")
-                        .font(.caption)
-                        .foregroundColor(.white)
-                        .padding(8)
-                        .background(Color.black.opacity(0.6))
-                        .cornerRadius(8)
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 10)
-                
-                Spacer()
-            }
-            .sheet(isPresented: $showingGroundSettings) {
-                GroundSettingsView(sceneCoordinator: sceneCoordinator)
-            }
+        }
+        .sheet(isPresented: $showingGroundSettings) {
+            GroundSettingsView(sceneCoordinator: sceneCoordinator)
+        }
+        .sheet(isPresented: $showingBrickSettings) {
+            BrickSettingsView(sceneCoordinator: sceneCoordinator)
         }
     }
 }

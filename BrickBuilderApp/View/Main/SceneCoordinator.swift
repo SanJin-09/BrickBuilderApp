@@ -30,10 +30,16 @@ extension SCNVector3 {
     }
 }
 
+fileprivate typealias GridPoint = SIMD3<Int>
+fileprivate let gridSize: Float = 0.8
+fileprivate let brickBodyHeight: Float = 0.92
+fileprivate let brickStackingHeight: Float = 0.96
+
 class SceneCoordinator: ObservableObject {
     let scene = SCNScene()
     let cameraNode = SCNNode()
-    private var groundNode: SCNNode?
+    private var groundNode: SCNNode? // 视觉地面
+    private var physicalGroundNode: SCNNode? // 物理地面
     
     @Published var brickCount = 0
     @Published var currentBrickTemplate: BrickTemplate?
@@ -118,19 +124,33 @@ class SceneCoordinator: ObservableObject {
     
     // MARK: - Ground Management
     public func updateGround(width: Int, length: Int, color: GroundColor) {
-        // 移除现有地面
+        // 移除旧的节点
         groundNode?.removeFromParentNode()
-        
-        // 创建新的砖块地面
+        physicalGroundNode?.removeFromParentNode()
+
         groundNode = createBaseplate(width: width, length: length, color: color)
+        groundNode?.name = "ground"
         scene.rootNode.addChildNode(groundNode!)
+
+        let plateHeight: CGFloat = 0.6
+        let plateWidth = CGFloat(width) * CGFloat(gridSize)
+        let plateLength = CGFloat(length) * CGFloat(gridSize)
+        
+        let physicsGeometry = SCNBox(width: plateWidth, height: plateHeight, length: plateLength, chamferRadius: 0.0)
+        let physicsShape = SCNPhysicsShape(geometry: physicsGeometry, options: nil)
+        
+        physicalGroundNode = SCNNode()
+        physicalGroundNode!.physicsBody = SCNPhysicsBody(type: .static, shape: physicsShape)
+        physicalGroundNode!.position = SCNVector3(x: 0, y: -Float(plateHeight/2), z: 0)
+        physicalGroundNode!.isHidden = true
+        
+        scene.rootNode.addChildNode(physicalGroundNode!)
     }
     
     private func createBaseplate(width: Int, length: Int, color: GroundColor) -> SCNNode {
-        let studSize: CGFloat = 0.8
         let plateHeight: CGFloat = 0.6
-        let plateWidth = CGFloat(width) * studSize
-        let plateLength = CGFloat(length) * studSize
+        let plateWidth = CGFloat(width) * CGFloat(gridSize)
+        let plateLength = CGFloat(length) * CGFloat(gridSize)
         
         let plateGeometry = SCNBox(width: plateWidth, height: plateHeight, length: plateLength, chamferRadius: 0.05)
         let plateMaterial = SCNMaterial()
@@ -141,14 +161,7 @@ class SceneCoordinator: ObservableObject {
         let plateNode = SCNNode(geometry: plateGeometry)
         plateNode.position = SCNVector3(x: 0, y: -Float(plateHeight/2), z: 0)
         
-        // 添加柱子网格
         addStudsToBaseplate(plateNode, width: width, length: length, color: color, plateHeight: plateHeight)
-                
-        // 添加物理体
-        plateNode.physicsBody = SCNPhysicsBody(type: .static, shape: nil)
-        plateNode.physicsBody?.restitution = 0.1
-        plateNode.physicsBody?.friction = 0.9
-                
         
         return plateNode
     }
@@ -156,38 +169,33 @@ class SceneCoordinator: ObservableObject {
     private func addStudsToBaseplate(_ plateNode: SCNNode, width: Int, length: Int, color: GroundColor, plateHeight: CGFloat) {
         let studRadius: CGFloat = 0.25
         let studHeight: CGFloat = 0.15
-        let studSpacing: CGFloat = 0.8
         
-        let startX = -CGFloat(width - 1) * studSpacing / 2
-        let startZ = -CGFloat(length - 1) * studSpacing / 2
+        let startX = -Float(width - 1) * gridSize / 2.0
+        let startZ = -Float(length - 1) * gridSize / 2.0
         
-        for row in 0..<length {
-            for col in 0..<width {
-                // 外圈圆柱
-                let outerStudGeometry = SCNCylinder(radius: studRadius, height: studHeight)
-                let studMaterial = SCNMaterial()
-                studMaterial.diffuse.contents = color.uiColor
-                studMaterial.specular.contents = UIColor.white
-                outerStudGeometry.materials = [studMaterial]
-                
-                let studNode = SCNNode(geometry: outerStudGeometry)
-                studNode.position = SCNVector3(
-                    x: Float(startX + CGFloat(col) * studSpacing),
-                    y: Float(plateHeight / 2 + studHeight / 2),
-                    z: Float(startZ + CGFloat(row) * studSpacing)
-                )
-                
-                // 内圈圆柱
-                let innerStudGeometry = SCNCylinder(radius: studRadius * 0.6, height: studHeight + 0.02)
-                let innerStudMaterial = SCNMaterial()
-                innerStudMaterial.diffuse.contents = UIColor.clear
-                innerStudGeometry.materials = [innerStudMaterial]
-                               
-                plateNode.addChildNode(studNode)
+        print("Ground studs - startX: \(startX), startZ: \(startZ)")
+        
+        for _ in 0..<length {
+            for row in 0..<length {
+                for col in 0..<width {
+                    let studGeometry = SCNCylinder(radius: studRadius, height: studHeight)
+                    let studMaterial = SCNMaterial()
+                    studMaterial.diffuse.contents = color.uiColor
+                    studMaterial.specular.contents = UIColor.white
+                    studGeometry.materials = [studMaterial]
+                    
+                    let studNode = SCNNode(geometry: studGeometry)
+                    studNode.position = SCNVector3(
+                        x: startX + Float(col) * gridSize,
+                        y: Float(plateHeight / 2 + studHeight / 2),
+                        z: startZ + Float(row) * gridSize
+                    )
+                    plateNode.addChildNode(studNode)
+                }
             }
         }
-        
     }
+
     
     // MARK: - Camera Control
     func handleZoom(_ scale: CGFloat) {
@@ -219,18 +227,16 @@ class SceneCoordinator: ObservableObject {
     func handleBrickDrop(at location: CGPoint, with template: BrickTemplate) {
         // 获取屏幕尺寸
         let screenSize = UIScreen.main.bounds.size
-        print("Screen size: \(screenSize)")
-        
+
         // 将屏幕坐标转换为归一化坐标 (0-1)
         let normalizedPoint = CGPoint(
             x: location.x / screenSize.width,
             y: location.y / screenSize.height
         )
-        print("Normalized point: \(normalizedPoint)")
-        
+
         if let worldPosition = raycastToWorld(normalizedPoint: normalizedPoint) {
             // 检查连接点
-            if let validPosition = findValidConnectionPoint(worldPosition, for: template) {
+            if let validPosition = findValidPlacement(for: template, near: worldPosition) {
 
                 // 创建并放置砖块
                 let brick = createBrick(from: template)
@@ -248,232 +254,208 @@ class SceneCoordinator: ObservableObject {
                 // 添加放置动画
                 addPlaceAnimation(to: brick)
                 
-                // 0.5秒后重新启用物理
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     brick.physicsBody?.type = .dynamic
                 }
                 
             } else {
-                // 如果没有有效连接点，播放失败动画
+                // 播放失败动画
                 showPlacementFailed(at: worldPosition)
             }
         }
     }
     
     private func raycastToWorld(normalizedPoint: CGPoint) -> SCNVector3? {
-        // 简化方法：直接将屏幕坐标映射到地面
-        _ = UIScreen.main.bounds.size
-        
-        // 获取相机信息
         let cameraPos = cameraNode.position
-        let cameraTarget = SCNVector3(0, 0, 0)
-        
-        let cameraDistance = (cameraPos - cameraTarget).length
-        
+        let cameraDistance = (cameraPos - SCNVector3Zero).length
         let mapRange: Float = cameraDistance * 0.8
         
-        // 将归一化坐标转换为世界坐标
         let worldX = Float(normalizedPoint.x - 0.5) * mapRange * 2.0
         let worldZ = Float(normalizedPoint.y - 0.5) * mapRange * 2.0
-        let worldY: Float = 0.1
-        
-        let worldPosition = SCNVector3(x: worldX, y: worldY, z: worldZ)
-        print("Simple world position: \(worldPosition)")
-        
-        return worldPosition
+        return SCNVector3(x: worldX, y: 0.1, z: worldZ)
     }
     
-    private func findValidConnectionPoint(_ worldPosition: SCNVector3, for template: BrickTemplate) -> SCNVector3? {
-        print("Checking connection for position: \(worldPosition)")
+    private func gridPoint(from world: SCNVector3) -> GridPoint {
+        let x = Int(round(world.x / gridSize))
+        let z = Int(round(world.z / gridSize))
         
-        // 首先检查地面连接
-        if let groundConnection = checkGroundConnection(worldPosition, for: template) {
-            print("Found ground connection: \(groundConnection)")
-            return groundConnection
-        }
-        
-        // 然后检查其他砖块连接
-        if let brickConnection = checkBrickConnection(worldPosition, for: template) {
-            print("Found brick connection: \(brickConnection)")
-            return brickConnection
-        }
-        
-        print("No valid connection found")
-        return nil
+        let level = Int(round((world.y - (brickBodyHeight / 2.0)) / brickStackingHeight)) + 1
+        return GridPoint(x, level, z)
     }
     
-    private func checkGroundConnection(_ worldPosition: SCNVector3, for template: BrickTemplate) -> SCNVector3? {
-        guard groundNode != nil else {
-            print("No ground node found")
+    private func getOccupiedVolume(for size: BrickSize, at position: SCNVector3) -> Set<GridPoint> {
+        var occupied = Set<GridPoint>()
+        
+        // 计算砖块在当前Y层的网格
+        let centerGridPoint = gridPoint(from: position)
+        let brickGridY = centerGridPoint.y
+        
+        // 计算砖块左下角第一个网格点的世界坐标
+        let startX = position.x - Float(size.width - 1) * gridSize / 2.0
+        let startZ = position.z - Float(size.height - 1) * gridSize / 2.0
+        
+        // 遍历砖块占据的所有网格点
+        for row in 0..<size.height {
+            for col in 0..<size.width {
+                let studWorldX = startX + Float(col) * gridSize
+                let studWorldZ = startZ + Float(row) * gridSize
+                
+                // 将每个占据的位置转换为网格点
+                let occupiedPoint = GridPoint(
+                    Int(round(studWorldX / gridSize)),
+                    brickGridY,
+                    Int(round(studWorldZ / gridSize))
+                )
+                
+                occupied.insert(occupiedPoint)
+            }
+        }
+        
+        return occupied
+    }
+    
+    private func buildSceneOccupationMap() -> Set<GridPoint> {
+        var occupied = Set<GridPoint>()
+        for brick in getAllBricks() {
+            let size = getBrickSize(brick)
+            let volume = getOccupiedVolume(for: size, at: brick.position)
+            occupied.formUnion(volume)
+        }
+        return occupied
+    }
+    
+    private func getFootprint(for size: BrickSize, at position: SCNVector3) -> Set<GridPoint> {
+        var points = Set<GridPoint>()
+        
+        // 计算左下角第一个连接点的世界坐标
+        let startX = position.x - Float(size.width - 1) * gridSize / 2.0
+        let startZ = position.z - Float(size.height - 1) * gridSize / 2.0
+        
+        let supportGridY = gridPoint(from: position).y - 1
+        
+        // 遍历所有连接点
+        for row in 0..<size.height {
+            for col in 0..<size.width {
+                let studWorldX = startX + Float(col) * gridSize
+                let studWorldZ = startZ + Float(row) * gridSize
+                
+                let supportPoint = GridPoint(
+                    Int(round(studWorldX / gridSize)),
+                    supportGridY,
+                    Int(round(studWorldZ / gridSize))
+                )
+                
+                points.insert(supportPoint)
+            }
+        }
+        return points
+    }
+    
+    // 获取所有可用的支撑点
+    private func getAvailableStuds() -> [GridPoint: (pos: SCNVector3, owner: SCNNode)] {
+        var studs = [GridPoint: (pos: SCNVector3, owner: SCNNode)]()
+        
+        if let ground = groundNode {
+            let groundSizeW = 8
+            let groundSizeL = 8
+            let groundSupportLevel = 0
+            
+            let startX = -Float(groundSizeW - 1) * gridSize / 2.0
+            let startZ = -Float(groundSizeL - 1) * gridSize / 2.0
+            
+            for r in 0..<groundSizeL {
+                for c in 0..<groundSizeW {
+                    // 计算每个凸点精确的世界坐标 (Y=0代表地面支撑面)
+                    let worldPos = SCNVector3(startX + Float(c) * gridSize, 0, startZ + Float(r) * gridSize)
+                    let gridKey = GridPoint(Int(round(worldPos.x / gridSize)), groundSupportLevel, Int(round(worldPos.z / gridSize)))
+                    studs[gridKey] = (pos: worldPos, owner: ground)
+                }
+            }
+        }
+
+        for brick in getAllBricks() {
+            let size = getBrickSize(brick)
+            let brickLevel = gridPoint(from: brick.position).y
+            let brickSupportLevel = brickLevel
+            
+            let startX = brick.position.x - Float(size.width - 1) * gridSize / 2.0
+            let startZ = brick.position.z - Float(size.height - 1) * gridSize / 2.0
+            
+            // 支撑面的Y坐标是砖块的顶部
+            let supportY = brick.position.y + brickBodyHeight / 2.0
+            
+            for row in 0..<size.height {
+                for col in 0..<size.width {
+                    let worldPos = SCNVector3(startX + Float(col) * gridSize, supportY, startZ + Float(row) * gridSize)
+                    let gridKey = GridPoint(Int(round(worldPos.x / gridSize)), brickSupportLevel, Int(round(worldPos.z / gridSize)))
+                    studs[gridKey] = (pos: worldPos, owner: brick)
+                }
+            }
+        }
+        return studs
+    }
+    
+    private func findValidPlacement(for template: BrickTemplate, near worldPosition: SCNVector3) -> SCNVector3? {
+        let newBrickSize = template.size
+        let availableStuds = getAvailableStuds()
+        let occupiedVolume = buildSceneOccupationMap()
+        let anchorGridPoint = gridPoint(from: worldPosition)
+        
+        var closestStudKey: GridPoint? = nil
+        var minDistance = Float.infinity
+        
+        for studKey in availableStuds.keys {
+            let dx = Float(studKey.x - anchorGridPoint.x)
+            let dy = Float(studKey.y - anchorGridPoint.y)
+            let dz = Float(studKey.z - anchorGridPoint.z)
+            let dist = dx*dx + dy*dy + dz*dz
+            if dist < minDistance {
+                minDistance = dist
+                closestStudKey = studKey
+            }
+        }
+        
+        guard let targetStudKey = closestStudKey,
+              let (targetStudWorldPos, supportNode) = availableStuds[targetStudKey] else {
             return nil
         }
         
-        // 简化地面连接检测
-        let _: Float = 0.0  // 地面Y坐标
-        let brickHeight: Float = 0.46  // 砖块放在地面上的高度
-        
-        // 将世界位置对齐到网格
-        let gridSize: Float = 0.8  // stud间距
-        let snappedX = round(worldPosition.x / gridSize) * gridSize
-        let snappedZ = round(worldPosition.z / gridSize) * gridSize
-        
-        // 检查是否在地面范围内（假设地面是8x8）
-        let groundSize: Float = 8.0 * gridSize / 2.0  // 地面半径
-        if abs(snappedX) <= groundSize && abs(snappedZ) <= groundSize {
-            let connectionPoint = SCNVector3(x: snappedX, y: brickHeight, z: snappedZ)
-            print("Ground connection at: \(connectionPoint)")
-            return connectionPoint
-        }
-        
-        print("Position outside ground bounds")
-        return nil
-    }
-    
-    
-    private func checkBrickConnection(_ worldPosition: SCNVector3, for template: BrickTemplate) -> SCNVector3? {
-        let existingBricks = getAllBricks()
-        print("Checking \(existingBricks.count) existing bricks for connection")
-        
-        for brick in existingBricks {
-            if let connectionPoint = findConnectionOnBrick(brick, near: worldPosition, for: template) {
-                print("Found connection on brick: \(connectionPoint)")
-                return connectionPoint
-            }
-        }
-        
-        return nil
-    }
-    
-    
-    private func findConnectionOnBrick(_ brick: SCNNode, near position: SCNVector3, for template: BrickTemplate) -> SCNVector3? {
-        // 获取砖块的大小（从名称解析）
-        let brickSize = getBrickSize(brick)
-        let brickPosition = brick.position
-        
-        // 计算砖块顶部studs的位置
-        let studPositions = calculateStudPositions(at: brickPosition, size: brickSize, onTop: true)
-        
-        // 找到最近的stud
-        var closestStud: SCNVector3?
-        var minDistance: Float = Float.greatestFiniteMagnitude
-        let maxConnectionDistance: Float = 1.0
-        
-        for studPos in studPositions {
-            let distance = distanceBetween(position, studPos)
-            if distance < minDistance && distance < maxConnectionDistance {
-                minDistance = distance
-                closestStud = studPos
-            }
-        }
-        
-        if let stud = closestStud {
-            // 计算新砖块的位置（在找到的stud之上）
-            let brickHeight: Float = 0.92
-            let newPosition = SCNVector3(x: stud.x, y: stud.y + brickHeight, z: stud.z)
-            
-            // 检查是否可以在此位置放置新砖块
-            if canPlaceBrickAt(newPosition, size: template.size, excluding: brick) {
-                return newPosition
-            }
-        }
-        
-        return nil
-    }
-    
-    private func calculateStudPositions(at brickPosition: SCNVector3, size: BrickSize, onTop: Bool) -> [SCNVector3] {
-        var positions: [SCNVector3] = []
-        
-        let studSpacing: Float = 0.8
-        let brickHeight: Float = 0.92
-        let studHeight: Float = onTop ? (brickHeight / 2 + 0.18 / 2) : 0.0
-        
-        let startX = brickPosition.x - Float(size.width - 1) * studSpacing / 2
-        let startZ = brickPosition.z - Float(size.height - 1) * studSpacing / 2
-        
-        for row in 0..<size.height {
-            for col in 0..<size.width {
-                let studX = startX + Float(col) * studSpacing
-                let studZ = startZ + Float(row) * studSpacing
-                let studY = brickPosition.y + studHeight
+        for r_offset in 0..<newBrickSize.height {
+            for c_offset in 0..<newBrickSize.width {
                 
-                positions.append(SCNVector3(x: studX, y: studY, z: studZ))
+                let startOffsetX = Float(c_offset) * gridSize - Float(newBrickSize.width - 1) * gridSize / 2.0
+                let startOffsetZ = Float(r_offset) * gridSize - Float(newBrickSize.height - 1) * gridSize / 2.0
+                
+                let newBrickX = targetStudWorldPos.x - startOffsetX
+                let newBrickZ = targetStudWorldPos.z - startOffsetZ
+                
+                let newBrickY: Float
+                if supportNode.name == "ground" {
+                    newBrickY = brickBodyHeight / 2.0
+                } else {
+                    let supportBrickTopY = supportNode.position.y + brickBodyHeight / 2.0
+                    newBrickY = supportBrickTopY + brickBodyHeight / 2.0
+                }
+                
+                let candidatePosition = SCNVector3(newBrickX, newBrickY, newBrickZ)
+                
+                let requiredFootprint = getFootprint(for: newBrickSize, at: candidatePosition)
+                let supportingStuds = requiredFootprint.filter { availableStuds.keys.contains($0) }
+                
+                let allSupported = supportingStuds.count == requiredFootprint.count
+                let sameLevel = supportingStuds.allSatisfy { $0.y == targetStudKey.y }
+
+                if allSupported && sameLevel {
+                    if occupiedVolume.isDisjoint(with: getOccupiedVolume(for: newBrickSize, at: candidatePosition)) {
+                        return candidatePosition
+                    }
+                }
             }
         }
-        
-        return positions
-    }
-    
-    private func canPlaceBrickAt(_ position: SCNVector3, size: BrickSize, excluding: SCNNode? = nil) -> Bool {
-        // 简化的重叠检测
-        let newBrickBounds = getBrickBounds(at: position, size: size)
-        
-        for brick in getAllBricks() {
-            if brick == excluding { continue }
-            
-            let existingSize = getBrickSize(brick)
-            let existingBounds = getBrickBounds(at: brick.position, size: existingSize)
-            
-            if boundsIntersect(newBrickBounds, existingBounds) {
-                print("Brick would overlap with existing brick")
-                return false
-            }
-        }
-        
-        return true
-    }
-    
-    private func getBrickBounds(at position: SCNVector3, size: BrickSize) -> (min: SCNVector3, max: SCNVector3) {
-        let brickWidth = Float(size.width) * 0.8
-        let brickDepth = Float(size.height) * 0.8
-        let brickHeight: Float = 0.92
-        
-        let min = SCNVector3(
-            x: position.x - brickWidth / 2,
-            y: position.y - brickHeight / 2,
-            z: position.z - brickDepth / 2
-        )
-        
-        let max = SCNVector3(
-            x: position.x + brickWidth / 2,
-            y: position.y + brickHeight / 2,
-            z: position.z + brickDepth / 2
-        )
-        
-        return (min, max)
-    }
-
-    private func getBrickSize(_ brick: SCNNode) -> BrickSize {
-        // 从砖块名称解析尺寸
-        if let name = brick.name, name.hasPrefix("brick_") {
-            let components = name.components(separatedBy: "_")
-            if components.count >= 3,
-               let width = Int(components[1]),
-               let height = Int(components[2]) {
-                return BrickSize(width: width, height: height)
-            }
-        }
-        return BrickSize(width: 2, height: 2)
-    }
-
-    private func boundsIntersect(_ bounds1: (min: SCNVector3, max: SCNVector3), _ bounds2: (min: SCNVector3, max: SCNVector3)) -> Bool {
-        return bounds1.min.x < bounds2.max.x && bounds1.max.x > bounds2.min.x &&
-               bounds1.min.y < bounds2.max.y && bounds1.max.y > bounds2.min.y &&
-               bounds1.min.z < bounds2.max.z && bounds1.max.z > bounds2.min.z
-    }
-
-    private func getAllBricks() -> [SCNNode] {
-        return scene.rootNode.childNodes.filter { $0.name?.hasPrefix("brick_") == true }
-    }
-
-    private func distanceBetween(_ pos1: SCNVector3, _ pos2: SCNVector3) -> Float {
-        let dx = pos1.x - pos2.x
-        let dy = pos1.y - pos2.y
-        let dz = pos1.z - pos2.z
-        return sqrt(dx*dx + dy*dy + dz*dz)
+        return nil
     }
 
     private func showPlacementFailed(at position: SCNVector3) {
-        print("Showing placement failed at: \(position)")
         
         guard let template = currentBrickTemplate else { return }
         
@@ -502,6 +484,23 @@ class SceneCoordinator: ObservableObject {
         let sequence = SCNAction.sequence([fadeOut, remove])
         
         failedBrick.runAction(sequence)
+    }
+    
+    private func getAllBricks() -> [SCNNode] {
+        return scene.rootNode.childNodes.filter { $0.name?.hasPrefix("brick_") == true }
+    }
+    
+    private func getBrickSize(_ brick: SCNNode) -> BrickSize {
+        // 从砖块名称解析尺寸
+        if let name = brick.name, name.hasPrefix("brick_") {
+            let components = name.components(separatedBy: "_")
+            if components.count >= 3,
+               let width = Int(components[1]),
+               let height = Int(components[2]) {
+                return BrickSize(width: width, height: height)
+            }
+        }
+        return BrickSize(width: 2, height: 2)
     }
     
     // MARK: - Brick Creation
@@ -582,7 +581,6 @@ class SceneCoordinator: ObservableObject {
     }
     
     private func addHollowBottomToBrick(_ brickNode: SCNNode, rows: Int, columns: Int, brickHeight: CGFloat) {
-        // 在砖块底部添加hollow结构，用于连接其他砖块
         let tubeRadius: CGFloat = 0.2
         let tubeHeight: CGFloat = 0.3
         let spacing: CGFloat = 0.8
@@ -611,7 +609,6 @@ class SceneCoordinator: ObservableObject {
     }
     
     private func addPlaceAnimation(to node: SCNNode) {
-        // 创建放置动画
         let scaleUp = SCNAction.scale(to: 1.1, duration: 0.1)
         let scaleDown = SCNAction.scale(to: 1.0, duration: 0.1)
         let sequence = SCNAction.sequence([scaleUp, scaleDown])

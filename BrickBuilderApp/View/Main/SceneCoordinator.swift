@@ -44,6 +44,10 @@ class SceneCoordinator: ObservableObject {
     @Published var brickCount = 0
     @Published var currentBrickTemplate: BrickTemplate?
     
+    // 动态地面尺寸
+    private var currentGroundWidth: Int = 8
+    private var currentGroundLength: Int = 8
+    
     // 相机缩放控制
     private var initialCameraPosition: SCNVector3 = SCNVector3(x: 0, y: 8, z: 15)
     private let minZoom: Float = 0.3
@@ -124,6 +128,11 @@ class SceneCoordinator: ObservableObject {
     
     // MARK: - Ground Management
     public func updateGround(width: Int, length: Int, color: GroundColor) {
+        
+        // 更新当前地面尺寸
+        currentGroundWidth = width
+        currentGroundLength = length
+        
         // 移除旧的节点
         groundNode?.removeFromParentNode()
         physicalGroundNode?.removeFromParentNode()
@@ -148,6 +157,7 @@ class SceneCoordinator: ObservableObject {
     }
     
     private func createBaseplate(width: Int, length: Int, color: GroundColor) -> SCNNode {
+        
         let plateHeight: CGFloat = 0.6
         let plateWidth = CGFloat(width) * CGFloat(gridSize)
         let plateLength = CGFloat(length) * CGFloat(gridSize)
@@ -167,13 +177,12 @@ class SceneCoordinator: ObservableObject {
     }
     
     private func addStudsToBaseplate(_ plateNode: SCNNode, width: Int, length: Int, color: GroundColor, plateHeight: CGFloat) {
+        
         let studRadius: CGFloat = 0.25
         let studHeight: CGFloat = 0.15
         
         let startX = -Float(width - 1) * gridSize / 2.0
         let startZ = -Float(length - 1) * gridSize / 2.0
-        
-        print("Ground studs - startX: \(startX), startZ: \(startZ)")
         
         for _ in 0..<length {
             for row in 0..<length {
@@ -190,6 +199,7 @@ class SceneCoordinator: ObservableObject {
                         y: Float(plateHeight / 2 + studHeight / 2),
                         z: startZ + Float(row) * gridSize
                     )
+                    studNode.name = "ground_stud_\(row)_\(col)"
                     plateNode.addChildNode(studNode)
                 }
             }
@@ -266,13 +276,86 @@ class SceneCoordinator: ObservableObject {
     }
     
     private func raycastToWorld(normalizedPoint: CGPoint) -> SCNVector3? {
-        let cameraPos = cameraNode.position
-        let cameraDistance = (cameraPos - SCNVector3Zero).length
-        let mapRange: Float = cameraDistance * 0.8
         
-        let worldX = Float(normalizedPoint.x - 0.5) * mapRange * 2.0
-        let worldZ = Float(normalizedPoint.y - 0.5) * mapRange * 2.0
-        return SCNVector3(x: worldX, y: 0.1, z: worldZ)
+        let screenSize = UIScreen.main.bounds.size
+
+        let ndcX = Float(normalizedPoint.x * 2.0 - 1.0)
+        let ndcY = Float((1.0 - normalizedPoint.y) * 2.0 - 1.0)
+        
+        // 获取相机的变换信息
+        let cameraPos = cameraNode.position
+        let cameraTransform = cameraNode.worldTransform
+        
+        // 提取相机朝向向量
+        let cameraForward = SCNVector3(-cameraTransform.m31, -cameraTransform.m32, -cameraTransform.m33).normalized()
+        let cameraRight = SCNVector3(cameraTransform.m11, cameraTransform.m12, cameraTransform.m13).normalized()
+        let cameraUp = SCNVector3(cameraTransform.m21, cameraTransform.m22, cameraTransform.m23).normalized()
+        
+        // 获取相机的FOV并计算投影参数
+        guard let camera = cameraNode.camera else { return nil }
+        let fov = camera.fieldOfView
+        let aspectRatio = Float(screenSize.width / screenSize.height)
+        
+        // 计算射线方向
+        let fovRadians = fov * .pi / 180.0
+        let halfHeight = tan(fovRadians / 2.0)
+        let halfWidth = halfHeight * CGFloat(aspectRatio)
+        
+        // 计算屏幕空间到相机空间的映射
+        let cameraDistance = cameraPos.length
+        let projectionScale = cameraDistance * 0.1
+        
+        let fw = Float(halfWidth)
+        let fh = Float(halfHeight)
+        let fp = Float(projectionScale)
+
+        let rightScalar = ndcX * fw * fp
+        let upScalar    = ndcY * fh * fp
+        
+        let rightOffset = cameraRight * rightScalar
+        let upOffset = cameraUp * upScalar
+        
+        // 计算射线方向
+        let combinedOffset = rightOffset + upOffset
+        let rayDirection = (cameraForward + combinedOffset).normalized()
+        
+        // 使用SceneKit的hitTest进行精确检测
+        return performPreciseHitTest(from: cameraPos, direction: rayDirection)
+    }
+    
+    private func performPreciseHitTest(from origin: SCNVector3, direction: SCNVector3) -> SCNVector3? {
+        let rayLength: Float = 50.0
+        let rayEnd = origin + direction * rayLength
+        
+        // 首先尝试与场景中的物体进行碰撞检测
+        let hitResults = scene.rootNode.hitTestWithSegment(from: origin, to: rayEnd, options: [
+            SCNHitTestOption.searchMode.rawValue: SCNHitTestSearchMode.all.rawValue,
+            SCNHitTestOption.ignoreHiddenNodes.rawValue: false
+        ])
+        
+        // 过滤结果，优先选择地面或砖块
+        for hit in hitResults {
+            if hit.node.name?.contains("ground") == true || hit.node.name?.hasPrefix("brick_") == true {
+                return hit.worldCoordinates
+            }
+        }
+        
+        if direction.y != 0 {
+            let t = -origin.y / direction.y
+            if t > 0 {
+                let intersectionPoint = origin + direction * t
+                
+                // 确保交点在地面范围内
+                let groundHalfWidth = Float(currentGroundWidth) * gridSize / 2.0
+                let groundHalfLength = Float(currentGroundLength) * gridSize / 2.0
+                
+                if abs(intersectionPoint.x) <= groundHalfWidth && abs(intersectionPoint.z) <= groundHalfLength {
+                    return intersectionPoint
+                }
+            }
+        }
+        
+        return nil
     }
     
     private func gridPoint(from world: SCNVector3) -> GridPoint {
@@ -356,8 +439,8 @@ class SceneCoordinator: ObservableObject {
         var studs = [GridPoint: (pos: SCNVector3, owner: SCNNode)]()
         
         if let ground = groundNode {
-            let groundSizeW = 8
-            let groundSizeL = 8
+            let groundSizeW = currentGroundWidth
+            let groundSizeL = currentGroundLength
             let groundSupportLevel = 0
             
             let startX = -Float(groundSizeW - 1) * gridSize / 2.0

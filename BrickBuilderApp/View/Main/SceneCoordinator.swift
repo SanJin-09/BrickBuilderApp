@@ -40,9 +40,14 @@ class SceneCoordinator: ObservableObject {
     let cameraNode = SCNNode()
     private var groundNode: SCNNode? // 视觉地面
     private var physicalGroundNode: SCNNode? // 物理地面
+    private var ghostBrick: SCNNode?
+    private var isGhostValid: Bool = false
     
     @Published var brickCount = 0
     @Published var currentBrickTemplate: BrickTemplate?
+    @Published var currentRotation: Int = 0
+    @Published var selectedBrick: SCNNode?
+    @Published var deleteButtonPosition: CGPoint?
     
     // 动态地面尺寸
     private var currentGroundWidth: Int = 8
@@ -226,6 +231,142 @@ class SceneCoordinator: ObservableObject {
         
     }
     
+    // MARK: - BrickDelate
+    func handleTap(at location: CGPoint, in view: SCNView) {
+        let hitTestResults = view.hitTest(location, options: nil)
+        
+        if let firstResult = hitTestResults.first(where: { $0.node.name?.hasPrefix("brick_") == true }) {
+            selectBrick(firstResult.node, in: view)
+        } else {
+            deselectBrick()
+        }
+    }
+    
+    private func selectBrick(_ node: SCNNode, in view: SCNView) {
+        // 如果已经选中了同一个砖块，则不做任何事
+        if selectedBrick == node { return }
+        
+        deselectBrick() // 先取消之前的选择
+        
+        selectedBrick = node
+        
+        // 在砖块右上角添加一个高亮效果（可选）
+        let highlightAction = SCNAction.repeatForever(SCNAction.sequence([
+            SCNAction.customAction(duration: 0.5, action: { node, _ in
+                node.geometry?.firstMaterial?.emission.contents = UIColor.yellow
+            }),
+            SCNAction.customAction(duration: 0.5, action: { node, _ in
+                node.geometry?.firstMaterial?.emission.contents = UIColor.black
+            })
+        ]))
+        node.runAction(highlightAction, forKey: "highlight")
+
+        // 计算删除按钮的位置
+        let boundingBox = node.boundingBox
+        let button3DPos = SCNVector3(boundingBox.max.x, boundingBox.max.y, boundingBox.max.z)
+        let worldPos = node.convertPosition(button3DPos, to: nil)
+        let projectedPoint = view.projectPoint(worldPos)
+        
+        DispatchQueue.main.async {
+            self.deleteButtonPosition = CGPoint(x: CGFloat(projectedPoint.x), y: CGFloat(projectedPoint.y))
+        }
+    }
+
+    func deselectBrick() {
+        if let brick = selectedBrick {
+            brick.removeAction(forKey: "highlight")
+            brick.geometry?.firstMaterial?.emission.contents = UIColor.black // 恢复原状
+        }
+        selectedBrick = nil
+        deleteButtonPosition = nil
+    }
+
+    func deleteSelectedBrick() {
+        guard let brick = selectedBrick else { return }
+        
+        brick.removeFromParentNode()
+        brickCount -= 1
+        deselectBrick()
+    }
+    
+    // MARK: - Ghost Brick Management
+    private func updateGhostBrick(for template: BrickTemplate, at location: CGPoint) {
+        // 获取屏幕尺寸
+        let screenSize = UIScreen.main.bounds.size
+        
+        // 将屏幕坐标转换为归一化坐标 (0-1)
+        let normalizedPoint = CGPoint(
+            x: location.x / screenSize.width,
+            y: location.y / screenSize.height
+        )
+        
+        if let worldPosition = raycastToWorld(normalizedPoint: normalizedPoint) {
+            if ghostBrick == nil {
+                createGhostBrick(from: template)
+            }
+            
+            // 检查是否可以放置
+            if let validPosition = findValidPlacement(for: template, near: worldPosition) {
+                // 可以放置 - 绿色
+                ghostBrick?.position = validPosition
+                setGhostBrickColor(isValid: true)
+                isGhostValid = true
+            } else {
+                // 不能放置 - 红色
+                ghostBrick?.position = worldPosition
+                setGhostBrickColor(isValid: false)
+                isGhostValid = false
+            }
+            
+            ghostBrick?.isHidden = false
+        } else {
+            ghostBrick?.isHidden = true
+        }
+    }
+    
+    private func createGhostBrick(from template: BrickTemplate) {
+        // 创建虚影砖块
+        let brick = createBrick(from: template)
+        
+        brick.physicsBody = nil
+        brick.opacity = 0.6
+        
+        scene.rootNode.addChildNode(brick)
+        
+        ghostBrick = brick
+        ghostBrick?.name = "ghost_brick"
+    }
+    
+    private func setGhostBrickColor(isValid: Bool) {
+        guard let ghost = ghostBrick else { return }
+        
+        let color = isValid ? UIColor.green : UIColor.red
+        
+        // 更新主体材质
+        ghost.geometry?.materials.forEach { material in
+            material.diffuse.contents = color
+            material.transparency = 0.6
+        }
+        
+        // 更新所有子节点材质（凸点等）
+        ghost.childNodes.forEach { child in
+            child.geometry?.materials.forEach { material in
+                material.diffuse.contents = color
+                material.transparency = 0.6
+            }
+        }
+    }
+    
+    func removeGhostBrick() {
+        ghostBrick?.removeFromParentNode()
+        ghostBrick = nil
+        isGhostValid = false
+    }
+    
+    func cleanup() {
+        removeGhostBrick()
+    }
+    
     // MARK: - Brick Template Management
     func setCurrentBrickTemplate(_ template: BrickTemplate) {
         DispatchQueue.main.async {
@@ -235,44 +376,42 @@ class SceneCoordinator: ObservableObject {
     
     // MARK: - Brick Drop Handling
     func handleBrickDrop(at location: CGPoint, with template: BrickTemplate) {
-        // 获取屏幕尺寸
+        
+        removeGhostBrick()
+        
+        _ = getEffectiveSize(for: template)
         let screenSize = UIScreen.main.bounds.size
+        let normalizedPoint = CGPoint(x: location.x / screenSize.width, y: location.y / screenSize.height)
 
-        // 将屏幕坐标转换为归一化坐标 (0-1)
-        let normalizedPoint = CGPoint(
-            x: location.x / screenSize.width,
-            y: location.y / screenSize.height
-        )
-
-        if let worldPosition = raycastToWorld(normalizedPoint: normalizedPoint) {
-            // 检查连接点
-            if let validPosition = findValidPlacement(for: template, near: worldPosition) {
-
-                // 创建并放置砖块
-                let brick = createBrick(from: template)
-                brick.position = validPosition
-                
-                // 物理效果暂时禁用
-                brick.physicsBody?.type = .kinematic
-                
-                scene.rootNode.addChildNode(brick)
-                
-                DispatchQueue.main.async {
-                    self.brickCount += 1
+        if raycastToWorld(normalizedPoint: normalizedPoint) != nil {
+            if let worldPosition = raycastToWorld(normalizedPoint: normalizedPoint) {
+                if let validPosition = findValidPlacement(for: template, near: worldPosition) {
+                    
+                    let brick = createBrick(from: template)
+                    brick.position = validPosition
+                    
+                    brick.physicsBody?.type = .kinematic
+                    scene.rootNode.addChildNode(brick)
+                    
+                    DispatchQueue.main.async { self.brickCount += 1 }
+                    addPlaceAnimation(to: brick)
+                    
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        brick.physicsBody?.type = .dynamic
+                    }
                 }
-                
-                // 添加放置动画
-                addPlaceAnimation(to: brick)
-                
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    brick.physicsBody?.type = .dynamic
-                }
-                
-            } else {
-                // 播放失败动画
-                showPlacementFailed(at: worldPosition)
             }
         }
+    }
+    
+    // 处理拖动更新
+    func handleDragUpdate(at location: CGPoint, with template: BrickTemplate) {
+        updateGhostBrick(for: template, at: location)
+    }
+    
+    // 处理拖动取消
+    func handleDragCancel() {
+        removeGhostBrick()
     }
     
     private func raycastToWorld(normalizedPoint: CGPoint) -> SCNVector3? {
@@ -319,7 +458,6 @@ class SceneCoordinator: ObservableObject {
         let combinedOffset = rightOffset + upOffset
         let rayDirection = (cameraForward + combinedOffset).normalized()
         
-        // 使用SceneKit的hitTest进行精确检测
         return performPreciseHitTest(from: cameraPos, direction: rayDirection)
     }
     
@@ -327,7 +465,6 @@ class SceneCoordinator: ObservableObject {
         let rayLength: Float = 50.0
         let rayEnd = origin + direction * rayLength
         
-        // 首先尝试与场景中的物体进行碰撞检测
         let hitResults = scene.rootNode.hitTestWithSegment(from: origin, to: rayEnd, options: [
             SCNHitTestOption.searchMode.rawValue: SCNHitTestSearchMode.all.rawValue,
             SCNHitTestOption.ignoreHiddenNodes.rawValue: false
@@ -366,7 +503,8 @@ class SceneCoordinator: ObservableObject {
         return GridPoint(x, level, z)
     }
     
-    private func getOccupiedVolume(for size: BrickSize, at position: SCNVector3) -> Set<GridPoint> {
+    private func getOccupiedVolume(for template: BrickTemplate, at position: SCNVector3) -> Set<GridPoint> {
+        let size = getEffectiveSize(for: template)
         var occupied = Set<GridPoint>()
         
         // 计算砖块在当前Y层的网格
@@ -383,7 +521,6 @@ class SceneCoordinator: ObservableObject {
                 let studWorldX = startX + Float(col) * gridSize
                 let studWorldZ = startZ + Float(row) * gridSize
                 
-                // 将每个占据的位置转换为网格点
                 let occupiedPoint = GridPoint(
                     Int(round(studWorldX / gridSize)),
                     brickGridY,
@@ -401,13 +538,13 @@ class SceneCoordinator: ObservableObject {
         var occupied = Set<GridPoint>()
         for brick in getAllBricks() {
             let size = getBrickSize(brick)
-            let volume = getOccupiedVolume(for: size, at: brick.position)
-            occupied.formUnion(volume)
+            occupied.formUnion(getOccupiedVolume(for: BrickTemplate(size: size, color: .red), at: brick.position))
         }
         return occupied
     }
     
-    private func getFootprint(for size: BrickSize, at position: SCNVector3) -> Set<GridPoint> {
+    private func getFootprint(for template: BrickTemplate, at position: SCNVector3) -> Set<GridPoint> {
+        let size = getEffectiveSize(for: template)
         var points = Set<GridPoint>()
         
         // 计算左下角第一个连接点的世界坐标
@@ -479,7 +616,7 @@ class SceneCoordinator: ObservableObject {
     }
     
     private func findValidPlacement(for template: BrickTemplate, near worldPosition: SCNVector3) -> SCNVector3? {
-        let newBrickSize = template.size
+        let newBrickSize = getEffectiveSize(for: template)
         let availableStuds = getAvailableStuds()
         let occupiedVolume = buildSceneOccupationMap()
         let anchorGridPoint = gridPoint(from: worldPosition)
@@ -522,14 +659,14 @@ class SceneCoordinator: ObservableObject {
                 
                 let candidatePosition = SCNVector3(newBrickX, newBrickY, newBrickZ)
                 
-                let requiredFootprint = getFootprint(for: newBrickSize, at: candidatePosition)
+                let requiredFootprint = getFootprint(for: template, at: candidatePosition)
                 let supportingStuds = requiredFootprint.filter { availableStuds.keys.contains($0) }
                 
                 let allSupported = supportingStuds.count == requiredFootprint.count
                 let sameLevel = supportingStuds.allSatisfy { $0.y == targetStudKey.y }
 
                 if allSupported && sameLevel {
-                    if occupiedVolume.isDisjoint(with: getOccupiedVolume(for: newBrickSize, at: candidatePosition)) {
+                    if occupiedVolume.isDisjoint(with: getOccupiedVolume(for: template, at: candidatePosition)) {
                         return candidatePosition
                     }
                 }
@@ -573,22 +710,16 @@ class SceneCoordinator: ObservableObject {
         return scene.rootNode.childNodes.filter { $0.name?.hasPrefix("brick_") == true }
     }
     
-    private func getBrickSize(_ brick: SCNNode) -> BrickSize {
-        // 从砖块名称解析尺寸
-        if let name = brick.name, name.hasPrefix("brick_") {
-            let components = name.components(separatedBy: "_")
-            if components.count >= 3,
-               let width = Int(components[1]),
-               let height = Int(components[2]) {
-                return BrickSize(width: width, height: height)
-            }
+    private func getEffectiveSize(for template: BrickTemplate) -> BrickSize {
+        if currentRotation == 1 || currentRotation == 3 { // 90° or 270°
+            return BrickSize(width: template.size.height, height: template.size.width)
         }
-        return BrickSize(width: 2, height: 2)
+        return template.size
     }
     
     // MARK: - Brick Creation
     private func createBrick(from template: BrickTemplate) -> SCNNode {
-        let size = template.size
+        let size = getEffectiveSize(for: template)
         let color = template.color
         
         // 主要砖块体
@@ -690,6 +821,16 @@ class SceneCoordinator: ObservableObject {
             }
         }
     }
+    
+    private func getBrickSize(_ brick: SCNNode) -> BrickSize {
+            if let name = brick.name, name.hasPrefix("brick_") {
+                let components = name.components(separatedBy: "_")
+                if components.count >= 3, let width = Int(components[1]), let height = Int(components[2]) {
+                    return BrickSize(width: width, height: height)
+                }
+            }
+            return BrickSize(width: 2, height: 2)
+        }
     
     private func addPlaceAnimation(to node: SCNNode) {
         let scaleUp = SCNAction.scale(to: 1.1, duration: 0.1)

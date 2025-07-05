@@ -48,6 +48,44 @@ extension BrickColor {
     }
 }
 
+// MARK: - CustomSceneView
+struct CustomSceneView: UIViewRepresentable {
+    let sceneCoordinator: SceneCoordinator
+
+    func makeUIView(context: Context) -> SCNView {
+        let scnView = SCNView()
+        scnView.scene = sceneCoordinator.scene
+        scnView.pointOfView = sceneCoordinator.cameraNode
+        scnView.allowsCameraControl = true
+        
+        // 添加点击手势
+        let tapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(context.coordinator.handleTap(_:)))
+        scnView.addGestureRecognizer(tapGesture)
+        
+        return scnView
+    }
+
+    func updateUIView(_ uiView: SCNView, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(sceneCoordinator: sceneCoordinator)
+    }
+
+    class Coordinator: NSObject {
+        private var sceneCoordinator: SceneCoordinator
+
+        init(sceneCoordinator: SceneCoordinator) {
+            self.sceneCoordinator = sceneCoordinator
+        }
+
+        @objc func handleTap(_ gestureRecognize: UIGestureRecognizer) {
+            let scnView = gestureRecognize.view as! SCNView
+            let location = gestureRecognize.location(in: scnView)
+            sceneCoordinator.handleTap(at: location, in: scnView)
+        }
+    }
+}
+
 // MARK: - ContentView
 struct ContentView: View {
     // 状态管理
@@ -61,27 +99,35 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             // 3D 场景视图
-            SceneView(
-                scene: sceneCoordinator.scene,
-                pointOfView: sceneCoordinator.cameraNode,
-                options: [.allowsCameraControl]
-            )
-            .ignoresSafeArea()
-            .gesture(
-                MagnificationGesture()
-                    .onChanged { value in
-                        sceneCoordinator.handleZoom(value)
-                    }
-            )
+            CustomSceneView(sceneCoordinator: sceneCoordinator)
+                .ignoresSafeArea()
+                .gesture(
+                    MagnificationGesture()
+                        .onChanged { value in
+                            sceneCoordinator.handleZoom(value)
+                        }
+                )
             
             // UI 界面叠加层
             uiOverlay
+            
+            // 删除按钮
+            if let pos = sceneCoordinator.deleteButtonPosition {
+                DeleteButton {
+                    sceneCoordinator.deleteSelectedBrick()
+                }
+                .position(pos)
+            }
         }
         .sheet(isPresented: $showingGroundSettings) {
             GroundSettingsView(sceneCoordinator: sceneCoordinator)
         }
         .sheet(isPresented: $showingBrickSettings) {
             BrickSettingsView(sceneCoordinator: sceneCoordinator)
+        }
+        .onDisappear {
+            // 清理选择状态
+            sceneCoordinator.deselectBrick()
         }
     }
     
@@ -132,9 +178,9 @@ struct TopHeaderView: View {
                     VStack(spacing: 100) {
                         if let template = sceneCoordinator.currentBrickTemplate{
                             CurrentBrickInfoView(
-                                template: template,
                                 sceneCoordinator: sceneCoordinator,
-                                textColor: textColor
+                                textColor: textColor,
+                                template: template,
                             )
                             .padding(.top, 50)
                         }
@@ -151,9 +197,12 @@ struct TopHeaderView: View {
 
 // MARK: - CurrentBrickInfoView
 struct CurrentBrickInfoView: View {
-    let template: BrickTemplate
+    
     @ObservedObject var sceneCoordinator: SceneCoordinator
+    @State private var isDragging = false
+    
     let textColor: Color
+    let template: BrickTemplate
     
     var body: some View {
         VStack(spacing: 5) {
@@ -169,7 +218,6 @@ struct CurrentBrickInfoView: View {
                         StudsPatternView(size: template.size)
                     )
                 
-                // 砖块信息
                 VStack(alignment: .leading) {
                     Text(template.size.displayName)
                         .font(.headline)
@@ -188,10 +236,47 @@ struct CurrentBrickInfoView: View {
         .shadow(color: Color(hex: "#c4d1d3"), radius: 8, x: 0, y: 4)
         .gesture(
             DragGesture(coordinateSpace: .global)
+                .onChanged { value in
+                    if !isDragging {
+                        isDragging = true
+                        // 触觉反馈
+                        let impact = UIImpactFeedbackGenerator(style: .light)
+                        impact.impactOccurred()
+                    }
+                    // 更新虚影位置
+                    sceneCoordinator.handleDragUpdate(at: value.location, with: template)
+                }
                 .onEnded { value in
+                    isDragging = false
+                    // 处理放置
                     sceneCoordinator.handleBrickDrop(at: value.location, with: template)
                 }
         )
+        .simultaneousGesture(
+            // 添加取消手势处理
+            TapGesture()
+                .onEnded { _ in
+                    if isDragging {
+                        isDragging = false
+                        sceneCoordinator.handleDragCancel()
+                    }
+                }
+        )
+    }
+}
+
+struct DeleteButton: View {
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "trash.circle.fill")
+                .font(.largeTitle)
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(.white, .red)
+                .shadow(radius: 5)
+        }
+        .transition(.scale.animation(.spring()))
     }
 }
 

@@ -231,7 +231,7 @@ class SceneCoordinator: ObservableObject {
         
     }
     
-    // MARK: - BrickDelate
+    // MARK: - Brick Delate
     func handleTap(at location: CGPoint, in view: SCNView) {
         let hitTestResults = view.hitTest(location, options: nil)
         
@@ -289,6 +289,29 @@ class SceneCoordinator: ObservableObject {
         deselectBrick()
     }
     
+    // MARK: - Brick Rotation
+    public func rotateCurrentBrick() {
+        currentRotation = (currentRotation + 1) % 4
+        applyRotationToGhost()
+    }
+    
+    private func applyRotationToGhost() {
+        guard let ghost = ghostBrick else {return}
+        let angle = Float(currentRotation) * .pi / 2
+        ghost.eulerAngles.y = angle
+        // 旋转后，重新检查位置有效性
+        if let template = currentBrickTemplate, let ghostPosition = ghostBrick?.position {
+            if let validPosition = findValidPlacement(for: template, near: ghostPosition) {
+                ghost.position = validPosition
+                setGhostBrickColor(isValid: true)
+                isGhostValid = true
+            } else {
+                setGhostBrickColor(isValid: false)
+                isGhostValid = false
+            }
+        }
+    }
+    
     // MARK: - Ghost Brick Management
     private func updateGhostBrick(for template: BrickTemplate, at location: CGPoint) {
         // 获取屏幕尺寸
@@ -327,6 +350,8 @@ class SceneCoordinator: ObservableObject {
     private func createGhostBrick(from template: BrickTemplate) {
         // 创建虚影砖块
         let brick = createBrick(from: template)
+        
+        brick.eulerAngles.y = Float(currentRotation) * .pi / 2
         
         brick.physicsBody = nil
         brick.opacity = 0.6
@@ -371,6 +396,7 @@ class SceneCoordinator: ObservableObject {
     func setCurrentBrickTemplate(_ template: BrickTemplate) {
         DispatchQueue.main.async {
             self.currentBrickTemplate = template
+            self.currentRotation = 0
         }
     }
     
@@ -379,26 +405,25 @@ class SceneCoordinator: ObservableObject {
         
         removeGhostBrick()
         
-        _ = getEffectiveSize(for: template)
         let screenSize = UIScreen.main.bounds.size
         let normalizedPoint = CGPoint(x: location.x / screenSize.width, y: location.y / screenSize.height)
 
-        if raycastToWorld(normalizedPoint: normalizedPoint) != nil {
-            if let worldPosition = raycastToWorld(normalizedPoint: normalizedPoint) {
-                if let validPosition = findValidPlacement(for: template, near: worldPosition) {
-                    
-                    let brick = createBrick(from: template)
-                    brick.position = validPosition
-                    
-                    brick.physicsBody?.type = .kinematic
-                    scene.rootNode.addChildNode(brick)
-                    
-                    DispatchQueue.main.async { self.brickCount += 1 }
-                    addPlaceAnimation(to: brick)
-                    
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        brick.physicsBody?.type = .dynamic
-                    }
+        if let worldPosition = raycastToWorld(normalizedPoint: normalizedPoint) {
+            if let validPosition = findValidPlacement(for: template, near: worldPosition) {
+                
+                let brick = createBrick(from: template)
+                brick.position = validPosition
+                // 应用旋转
+                brick.eulerAngles.y = Float(currentRotation) * .pi / 2
+                
+                brick.physicsBody?.type = .kinematic
+                scene.rootNode.addChildNode(brick)
+                
+                DispatchQueue.main.async { self.brickCount += 1 }
+                addPlaceAnimation(to: brick)
+                
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    brick.physicsBody?.type = .dynamic
                 }
             }
         }
@@ -503,19 +528,47 @@ class SceneCoordinator: ObservableObject {
         return GridPoint(x, level, z)
     }
     
-    private func getOccupiedVolume(for template: BrickTemplate, at position: SCNVector3) -> Set<GridPoint> {
+    private func getOccupiedVolume(for brick: SCNNode) -> Set<GridPoint> {
+        var occupied = Set<GridPoint>()
+        let size = getBrickSize(brick)
+        let position = brick.position
+        let rotation = Int(round(brick.eulerAngles.y / (.pi / 2))) % 4
+        
+        let effectiveSize = (rotation == 1 || rotation == 3) ? BrickSize(width: size.height, height: size.width) : size
+
+        let centerGridPoint = gridPoint(from: position)
+        let brickGridY = centerGridPoint.y
+
+        let startX = position.x - Float(effectiveSize.width - 1) * gridSize / 2.0
+        let startZ = position.z - Float(effectiveSize.height - 1) * gridSize / 2.0
+
+        for row in 0..<effectiveSize.height {
+            for col in 0..<effectiveSize.width {
+                let studWorldX = startX + Float(col) * gridSize
+                let studWorldZ = startZ + Float(row) * gridSize
+                
+                let occupiedPoint = GridPoint(
+                    Int(round(studWorldX / gridSize)),
+                    brickGridY,
+                    Int(round(studWorldZ / gridSize))
+                )
+                occupied.insert(occupiedPoint)
+            }
+        }
+        return occupied
+    }
+    
+    private func getProspectiveOccupiedVolume(for template: BrickTemplate, at position: SCNVector3) -> Set<GridPoint> {
+        // 此函数依赖 `currentRotation`，这对于计算新砖块是正确的
         let size = getEffectiveSize(for: template)
         var occupied = Set<GridPoint>()
         
-        // 计算砖块在当前Y层的网格
         let centerGridPoint = gridPoint(from: position)
         let brickGridY = centerGridPoint.y
         
-        // 计算砖块左下角第一个网格点的世界坐标
         let startX = position.x - Float(size.width - 1) * gridSize / 2.0
         let startZ = position.z - Float(size.height - 1) * gridSize / 2.0
         
-        // 遍历砖块占据的所有网格点
         for row in 0..<size.height {
             for col in 0..<size.width {
                 let studWorldX = startX + Float(col) * gridSize
@@ -537,8 +590,7 @@ class SceneCoordinator: ObservableObject {
     private func buildSceneOccupationMap() -> Set<GridPoint> {
         var occupied = Set<GridPoint>()
         for brick in getAllBricks() {
-            let size = getBrickSize(brick)
-            occupied.formUnion(getOccupiedVolume(for: BrickTemplate(size: size, color: .red), at: brick.position))
+            occupied.formUnion(getOccupiedVolume(for: brick))
         }
         return occupied
     }
@@ -585,7 +637,6 @@ class SceneCoordinator: ObservableObject {
             
             for r in 0..<groundSizeL {
                 for c in 0..<groundSizeW {
-                    // 计算每个凸点精确的世界坐标 (Y=0代表地面支撑面)
                     let worldPos = SCNVector3(startX + Float(c) * gridSize, 0, startZ + Float(r) * gridSize)
                     let gridKey = GridPoint(Int(round(worldPos.x / gridSize)), groundSupportLevel, Int(round(worldPos.z / gridSize)))
                     studs[gridKey] = (pos: worldPos, owner: ground)
@@ -595,18 +646,18 @@ class SceneCoordinator: ObservableObject {
 
         for brick in getAllBricks() {
             let size = getBrickSize(brick)
-            let brickLevel = gridPoint(from: brick.position).y
-            let brickSupportLevel = brickLevel
+            let brickSupportLevel = gridPoint(from: brick.position).y
             
-            let startX = brick.position.x - Float(size.width - 1) * gridSize / 2.0
-            let startZ = brick.position.z - Float(size.height - 1) * gridSize / 2.0
-            
-            // 支撑面的Y坐标是砖块的顶部
-            let supportY = brick.position.y + brickBodyHeight / 2.0
-            
+            // 遍历砖块的原始行列
             for row in 0..<size.height {
                 for col in 0..<size.width {
-                    let worldPos = SCNVector3(startX + Float(col) * gridSize, supportY, startZ + Float(row) * gridSize)
+                    let localX = (Float(col) - Float(size.width - 1) / 2.0) * gridSize
+                    let localZ = (Float(row) - Float(size.height - 1) / 2.0) * gridSize
+                    let localY = brickBodyHeight / 2.0
+                    
+                    let localStudPosition = SCNVector3(localX, localY, localZ)
+                    let worldPos = brick.convertPosition(localStudPosition, to: nil)
+                    
                     let gridKey = GridPoint(Int(round(worldPos.x / gridSize)), brickSupportLevel, Int(round(worldPos.z / gridSize)))
                     studs[gridKey] = (pos: worldPos, owner: brick)
                 }
@@ -666,7 +717,8 @@ class SceneCoordinator: ObservableObject {
                 let sameLevel = supportingStuds.allSatisfy { $0.y == targetStudKey.y }
 
                 if allSupported && sameLevel {
-                    if occupiedVolume.isDisjoint(with: getOccupiedVolume(for: template, at: candidatePosition)) {
+                    // FIX: 调用重命名后的函数
+                    if occupiedVolume.isDisjoint(with: getProspectiveOccupiedVolume(for: template, at: candidatePosition)) {
                         return candidatePosition
                     }
                 }
@@ -719,7 +771,7 @@ class SceneCoordinator: ObservableObject {
     
     // MARK: - Brick Creation
     private func createBrick(from template: BrickTemplate) -> SCNNode {
-        let size = getEffectiveSize(for: template)
+        let size = template.size
         let color = template.color
         
         // 主要砖块体

@@ -210,26 +210,51 @@ struct CurrentBrickInfoView: View {
                 .font(.caption)
                 .foregroundColor(textColor.opacity(0.7))
             
-            HStack(spacing: 12) {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color(template.color.uiColor))
-                    .frame(width: 50, height: 50)
-                    .overlay(
-                        StudsPatternView(size: template.size)
-                    )
+            HStack(spacing: 15) {
+                // 砖块信息和预览
+                HStack(spacing: 12) {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color(template.color.uiColor))
+                        .frame(width: 50, height: 50)
+                        .overlay(
+                            // 传入旋转状态
+                            StudsPatternView(
+                                size: template.size,
+                                rotation: sceneCoordinator.currentRotation
+                            )
+                        )
+                    
+                    VStack(alignment: .leading) {
+                        Text(template.size.displayName)
+                            .font(.headline)
+                            .fontWeight(.bold)
+                            .foregroundColor(textColor)
+                        Text(template.color.displayName)
+                            .font(.subheadline)
+                            .foregroundColor(textColor.opacity(0.8))
+                    }
+                }
                 
-                VStack(alignment: .leading) {
-                    Text(template.size.displayName)
-                        .font(.headline)
-                        .fontWeight(.bold)
+                // 分隔线
+                Rectangle()
+                    .fill(Color(hex: "#c4d1d3").opacity(0.5))
+                    .frame(width: 1, height: 40)
+                
+                // 旋转按钮
+                Button(action: {
+                    // 触觉反馈
+                    let impact = UIImpactFeedbackGenerator(style: .medium)
+                    impact.impactOccurred()
+                    sceneCoordinator.rotateCurrentBrick()
+                }) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.title)
                         .foregroundColor(textColor)
-                    Text(template.color.displayName)
-                        .font(.subheadline)
-                        .foregroundColor(textColor.opacity(0.8))
+                        .frame(width: 44, height: 44)
                 }
             }
             .padding(.horizontal, 20)
-            .padding(.vertical, 15)
+            .padding(.vertical, 10)
         }
         .background(Color(hex: "#effbfd"))
         .cornerRadius(15)
@@ -323,12 +348,16 @@ struct FloatingActionButton: View {
 // MARK: - StudsPatternView
 struct StudsPatternView: View {
     let size: BrickSize
+    let rotation: Int
     
     var body: some View {
+        let effectiveSize = (rotation == 1 || rotation == 3) ?
+            BrickSize(width: size.height, height: size.width) : size
+        
         VStack(spacing: 3) {
-            ForEach(0..<size.height, id: \.self) { _ in
+            ForEach(0..<effectiveSize.height, id: \.self) { _ in
                 HStack(spacing: 3) {
-                    ForEach(0..<size.width, id: \.self) { _ in
+                    ForEach(0..<effectiveSize.width, id: \.self) { _ in
                         Circle()
                             .fill(Color.white.opacity(0.5))
                             .frame(width: 6, height: 6)

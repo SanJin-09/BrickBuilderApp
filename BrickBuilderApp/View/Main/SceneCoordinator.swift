@@ -48,10 +48,12 @@ class SceneCoordinator: ObservableObject {
     @Published var currentRotation: Int = 0
     @Published var selectedBrick: SCNNode?
     @Published var deleteButtonPosition: CGPoint?
+    @Published var projectMessage: String?
     
     // 动态地面尺寸
     private var currentGroundWidth: Int = 8
     private var currentGroundLength: Int = 8
+    private var currentGroundColor: GroundColor = .gray
     
     // 相机缩放控制
     private var initialCameraPosition: SCNVector3 = SCNVector3(x: 0, y: 8, z: 15)
@@ -62,7 +64,7 @@ class SceneCoordinator: ObservableObject {
     // 连接检测参数
     private let studSize: Float = 0.8
     private let connectionTolerance: Float = 0.1
-    
+    private let persistenceManager = PersistenceManager()
     
     init() {
         setupScene()
@@ -129,6 +131,117 @@ class SceneCoordinator: ObservableObject {
     
     private func setupGround() {
         updateGround(width: 8, length: 8, color: .gray)
+    }
+    
+    private func clearScene() {
+        getAllBricks().forEach { $0.removeFromParentNode() }
+        DispatchQueue.main.async {
+            self.brickCount = 0
+        }
+    }
+    
+    // MARK: - Project Save/Load Logic
+    func saveProject(name: String) {
+        let savedBricks = getAllBricks().map { brick -> SavedBrick in
+            let size = getBrickSize(brick)
+            
+            let color: BrickColor
+            if let colorRawValue = brick.value(forKey: "originalColor") as? String,
+               let originalColor = BrickColor(rawValue: colorRawValue) {
+                color = originalColor
+            } else {
+                color = inferColorFromMaterial(brick.geometry?.firstMaterial)
+            }
+            let colorHex = color.toHex()
+            return SavedBrick(
+                sizeW: size.width,
+                sizeH: size.height,
+                colorHex: colorHex,
+                positionX: brick.position.x,
+                positionY: brick.position.y,
+                positionZ: brick.position.z,
+                rotationY: brick.eulerAngles.y
+            )
+        }
+        
+        let project = SavedProject(
+            groundWidth: currentGroundWidth,
+            groundLength: currentGroundLength,
+            groundColor: currentGroundColor,
+            bricks: savedBricks,
+            cameraZoom: currentZoom,
+            cameraPosition: [cameraNode.position.x, cameraNode.position.y, cameraNode.position.z],
+            cameraRotation: [cameraNode.orientation.x, cameraNode.orientation.y, cameraNode.orientation.z, cameraNode.orientation.w]
+        )
+        
+        do {
+            try persistenceManager.save(project: project, withName: name)
+            showProjectMessage("项目 '\(name)' 已保存！")
+        } catch {
+            showProjectMessage("保存失败: \(error.localizedDescription)")
+        }
+    }
+    
+    private func inferColorFromMaterial(_ material: SCNMaterial?) -> BrickColor {
+        guard let material = material else { return .gray }
+        
+        if let uiColor = material.diffuse.contents as? UIColor {
+            return BrickColor.fromUIColor(uiColor)
+        }
+        
+        return .gray
+    }
+
+    func loadProject(name: String) {
+        do {
+            let project = try persistenceManager.load(fromName: name)
+            
+            clearScene()
+            updateGround(width: project.groundWidth, length: project.groundLength, color: project.groundColor)
+            
+            for savedBrick in project.bricks {
+                let color = BrickColor.from(hex: savedBrick.colorHex)
+                let template = BrickTemplate(size: BrickSize(width: savedBrick.sizeW, height: savedBrick.sizeH), color: color)
+                let brickNode = createBrick(from: template)
+                
+                brickNode.position = SCNVector3(savedBrick.positionX, savedBrick.positionY, savedBrick.positionZ)
+                brickNode.eulerAngles.y = savedBrick.rotationY
+                brickNode.physicsBody?.type = .static
+                
+                scene.rootNode.addChildNode(brickNode)
+            }
+            
+            cameraNode.position = SCNVector3(project.cameraPosition[0], project.cameraPosition[1], project.cameraPosition[2])
+            cameraNode.orientation = SCNQuaternion(project.cameraRotation[0], project.cameraRotation[1], project.cameraRotation[2], project.cameraRotation[3])
+            currentZoom = project.cameraZoom
+            
+            DispatchQueue.main.async {
+                self.brickCount = project.bricks.count
+            }
+            showProjectMessage("项目 '\(name)' 已加载！")
+            
+        } catch {
+            showProjectMessage("加载失败: \(error.localizedDescription)")
+        }
+    }
+
+    func listSavedProjects() -> [String] {
+        return persistenceManager.listProjects()
+    }
+
+    func deleteProject(name: String) {
+        do {
+            try persistenceManager.delete(projectName: name)
+            showProjectMessage("项目 '\(name)' 已删除。")
+        } catch {
+            showProjectMessage("删除失败: \(error.localizedDescription)")
+        }
+    }
+    
+    private func showProjectMessage(_ message: String) {
+        DispatchQueue.main.async {
+            self.projectMessage = message
+        }
     }
     
     // MARK: - Ground Management
@@ -800,6 +913,8 @@ class SceneCoordinator: ObservableObject {
         brickNode.physicsBody?.restitution = 0.2
         brickNode.physicsBody?.friction = 0.8
         brickNode.physicsBody?.mass = 0.5
+        
+        brickNode.setValue(template.color.rawValue, forKey: "originalColor")
         
         return brickNode
     }

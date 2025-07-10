@@ -57,11 +57,8 @@ struct CustomSceneView: UIViewRepresentable {
         scnView.scene = sceneCoordinator.scene
         scnView.pointOfView = sceneCoordinator.cameraNode
         scnView.allowsCameraControl = true
-        
-        // 添加点击手势
         let tapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(context.coordinator.handleTap(_:)))
         scnView.addGestureRecognizer(tapGesture)
-        
         return scnView
     }
 
@@ -73,11 +70,7 @@ struct CustomSceneView: UIViewRepresentable {
 
     class Coordinator: NSObject {
         private var sceneCoordinator: SceneCoordinator
-
-        init(sceneCoordinator: SceneCoordinator) {
-            self.sceneCoordinator = sceneCoordinator
-        }
-
+        init(sceneCoordinator: SceneCoordinator) { self.sceneCoordinator = sceneCoordinator }
         @objc func handleTap(_ gestureRecognize: UIGestureRecognizer) {
             let scnView = gestureRecognize.view as! SCNView
             let location = gestureRecognize.location(in: scnView)
@@ -92,6 +85,7 @@ struct ContentView: View {
     @StateObject private var sceneCoordinator = SceneCoordinator()
     @State private var showingGroundSettings = false
     @State private var showingBrickSettings = false
+    @State private var showingProjectManager = false
     
     // UI颜色常量
     private let textColor = Color(hex: "#1f2b2e")
@@ -107,7 +101,6 @@ struct ContentView: View {
                             sceneCoordinator.handleZoom(value)
                         }
                 )
-            
             // UI 界面叠加层
             uiOverlay
             
@@ -125,10 +118,12 @@ struct ContentView: View {
         .sheet(isPresented: $showingBrickSettings) {
             BrickSettingsView(sceneCoordinator: sceneCoordinator)
         }
+        .sheet(isPresented: $showingProjectManager) { ProjectManagementView(sceneCoordinator: sceneCoordinator) }
         .onDisappear {
             // 清理选择状态
             sceneCoordinator.deselectBrick()
         }
+        .overlay(toastOverlay)
     }
     
     // UI 叠加层
@@ -140,15 +135,15 @@ struct ContentView: View {
             
             Spacer()
             
-            HStack {
+            HStack(alignment: .bottom) {
                 FloatingActionButton(
                     icon: "square.grid.3x3.middle.filled",
                     color: Color(hex: "#267c86"),
                     action: { showingGroundSettings = true }
                 )
-                
                 Spacer()
-                
+                FloatingActionButton(icon: "folder.fill", color: Color(hex: "#f0ad4e")) { showingProjectManager = true }
+                Spacer()
                 FloatingActionButton(
                     icon: "shippingbox.fill",
                     color: Color(hex: "#38c3d3"),
@@ -157,6 +152,28 @@ struct ContentView: View {
             }
             .padding(.horizontal, 40)
             .padding(.bottom, 50)
+        }
+    }
+    
+    @ViewBuilder
+    private var toastOverlay: some View {
+        if let message = sceneCoordinator.projectMessage {
+            VStack {
+                Spacer()
+                Text(message)
+                    .padding()
+                    .background(Color.black.opacity(0.75))
+                    .foregroundColor(.white)
+                    .font(.headline)
+                    .cornerRadius(15)
+                    .transition(.opacity.animation(.easeIn))
+                    .onAppear {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                            sceneCoordinator.projectMessage = nil
+                        }
+                    }
+            }
+            .padding(.bottom, 120)
         }
     }
 }

@@ -1,6 +1,6 @@
 import UIKit
 
-enum GroundColor: CaseIterable{
+enum GroundColor: CaseIterable, Codable{
     case gray, green, blue, brown, tan, white, black, red
     
     var uiColor: UIColor {

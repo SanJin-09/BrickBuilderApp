@@ -226,7 +226,9 @@ struct CurrentBrickInfoView: View {
             Text("当前砖块")
                 .font(.caption)
                 .foregroundColor(textColor.opacity(0.7))
-            
+            Text("拖动以放置")
+                .font(.caption)
+                .foregroundColor(textColor.opacity(0.7))
             HStack(spacing: 15) {
                 // 砖块信息和预览
                 HStack(spacing: 12) {

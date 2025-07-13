@@ -23,6 +23,10 @@ extension SCNVector3 {
         return sqrt(x * x + y * y + z * z)
     }
     
+    var lengthSquared: Float {
+        return x * x + y * y + z * z
+    }
+    
     func normalized() -> SCNVector3 {
         let len = length
         if len == 0 { return SCNVector3Zero }
@@ -38,6 +42,7 @@ fileprivate let brickStackingHeight: Float = 0.96
 class SceneCoordinator: ObservableObject {
     let scene = SCNScene()
     let cameraNode = SCNNode()
+    weak var scnView: SCNView?
     private var groundNode: SCNNode? // 视觉地面
     private var physicalGroundNode: SCNNode? // 物理地面
     private var ghostBrick: SCNNode?
@@ -359,11 +364,10 @@ class SceneCoordinator: ObservableObject {
         // 如果已经选中了同一个砖块，则不做任何事
         if selectedBrick == node { return }
         
-        deselectBrick() // 先取消之前的选择
+        deselectBrick()
         
         selectedBrick = node
         
-        // 在砖块右上角添加一个高亮效果（可选）
         let highlightAction = SCNAction.repeatForever(SCNAction.sequence([
             SCNAction.customAction(duration: 0.5, action: { node, _ in
                 node.geometry?.firstMaterial?.emission.contents = UIColor.yellow
@@ -388,7 +392,7 @@ class SceneCoordinator: ObservableObject {
     func deselectBrick() {
         if let brick = selectedBrick {
             brick.removeAction(forKey: "highlight")
-            brick.geometry?.firstMaterial?.emission.contents = UIColor.black // 恢复原状
+            brick.geometry?.firstMaterial?.emission.contents = UIColor.black
         }
         selectedBrick = nil
         deleteButtonPosition = nil
@@ -426,17 +430,8 @@ class SceneCoordinator: ObservableObject {
     }
     
     // MARK: - Ghost Brick Management
-    private func updateGhostBrick(for template: BrickTemplate, at location: CGPoint) {
-        // 获取屏幕尺寸
-        let screenSize = UIScreen.main.bounds.size
-        
-        // 将屏幕坐标转换为归一化坐标 (0-1)
-        let normalizedPoint = CGPoint(
-            x: location.x / screenSize.width,
-            y: location.y / screenSize.height
-        )
-        
-        if let worldPosition = raycastToWorld(normalizedPoint: normalizedPoint) {
+    private func updateGhostBrick(for template: BrickTemplate, at location: CGPoint, in view: SCNView) {
+        if let worldPosition = findWorldCoordinates(at: location, in: view) {
             if ghostBrick == nil {
                 createGhostBrick(from: template)
             }
@@ -448,8 +443,9 @@ class SceneCoordinator: ObservableObject {
                 setGhostBrickColor(isValid: true)
                 isGhostValid = true
             } else {
-                // 不能放置 - 红色
-                ghostBrick?.position = worldPosition
+                // 不能放置 - 尝试放在相近的位置
+                let snappedY = round(worldPosition.y / brickStackingHeight) * brickStackingHeight + brickBodyHeight / 2.0
+                ghostBrick?.position = SCNVector3(worldPosition.x, snappedY, worldPosition.z)
                 setGhostBrickColor(isValid: false)
                 isGhostValid = false
             }
@@ -486,7 +482,6 @@ class SceneCoordinator: ObservableObject {
             material.transparency = 0.6
         }
         
-        // 更新所有子节点材质（凸点等）
         ghost.childNodes.forEach { child in
             child.geometry?.materials.forEach { material in
                 material.diffuse.contents = color
@@ -514,14 +509,11 @@ class SceneCoordinator: ObservableObject {
     }
     
     // MARK: - Brick Drop Handling
-    func handleBrickDrop(at location: CGPoint, with template: BrickTemplate) {
+    func handleBrickDrop(at location: CGPoint, with template: BrickTemplate, in view: SCNView) {
         
         removeGhostBrick()
-        
-        let screenSize = UIScreen.main.bounds.size
-        let normalizedPoint = CGPoint(x: location.x / screenSize.width, y: location.y / screenSize.height)
 
-        if let worldPosition = raycastToWorld(normalizedPoint: normalizedPoint) {
+        if let worldPosition = findWorldCoordinates(at: location, in: view) {
             if let validPosition = findValidPlacement(for: template, near: worldPosition) {
                 
                 let brick = createBrick(from: template)
@@ -543,8 +535,8 @@ class SceneCoordinator: ObservableObject {
     }
     
     // 处理拖动更新
-    func handleDragUpdate(at location: CGPoint, with template: BrickTemplate) {
-        updateGhostBrick(for: template, at: location)
+    func handleDragUpdate(at location: CGPoint, with template: BrickTemplate, in view: SCNView) {
+        updateGhostBrick(for: template, at: location, in: view)
     }
     
     // 处理拖动取消
@@ -552,73 +544,32 @@ class SceneCoordinator: ObservableObject {
         removeGhostBrick()
     }
     
-    private func raycastToWorld(normalizedPoint: CGPoint) -> SCNVector3? {
-        
-        let screenSize = UIScreen.main.bounds.size
+    private func findWorldCoordinates(at location: CGPoint, in view: SCNView) -> SCNVector3? {
+        // 优先尝试碰撞到现有几何体的顶面
+        let options: [SCNHitTestOption: Any] = [
+            .searchMode: SCNHitTestSearchMode.all.rawValue,
+            .ignoreHiddenNodes: false
+        ]
+        let hitTestResults = view.hitTest(location, options: options)
 
-        let ndcX = Float(normalizedPoint.x * 2.0 - 1.0)
-        let ndcY = Float((1.0 - normalizedPoint.y) * 2.0 - 1.0)
-        
-        // 获取相机的变换信息
-        let cameraPos = cameraNode.position
-        let cameraTransform = cameraNode.worldTransform
-        
-        // 提取相机朝向向量
-        let cameraForward = SCNVector3(-cameraTransform.m31, -cameraTransform.m32, -cameraTransform.m33).normalized()
-        let cameraRight = SCNVector3(cameraTransform.m11, cameraTransform.m12, cameraTransform.m13).normalized()
-        let cameraUp = SCNVector3(cameraTransform.m21, cameraTransform.m22, cameraTransform.m23).normalized()
-        
-        // 获取相机的FOV并计算投影参数
-        guard let camera = cameraNode.camera else { return nil }
-        let fov = camera.fieldOfView
-        let aspectRatio = Float(screenSize.width / screenSize.height)
-        
-        // 计算射线方向
-        let fovRadians = fov * .pi / 180.0
-        let halfHeight = tan(fovRadians / 2.0)
-        let halfWidth = halfHeight * CGFloat(aspectRatio)
-        
-        // 计算屏幕空间到相机空间的映射
-        let cameraDistance = cameraPos.length
-        let projectionScale = cameraDistance * 0.1
-        
-        let fw = Float(halfWidth)
-        let fh = Float(halfHeight)
-        let fp = Float(projectionScale)
-
-        let rightScalar = ndcX * fw * fp
-        let upScalar    = ndcY * fh * fp
-        
-        let rightOffset = cameraRight * rightScalar
-        let upOffset = cameraUp * upScalar
-        
-        // 计算射线方向
-        let combinedOffset = rightOffset + upOffset
-        let rayDirection = (cameraForward + combinedOffset).normalized()
-        
-        return performPreciseHitTest(from: cameraPos, direction: rayDirection)
-    }
-    
-    private func performPreciseHitTest(from origin: SCNVector3, direction: SCNVector3) -> SCNVector3? {
-        let rayLength: Float = 50.0
-        let rayEnd = origin + direction * rayLength
-        
-        let hitResults = scene.rootNode.hitTestWithSegment(from: origin, to: rayEnd, options: [
-            SCNHitTestOption.searchMode.rawValue: SCNHitTestSearchMode.all.rawValue,
-            SCNHitTestOption.ignoreHiddenNodes.rawValue: false
-        ])
-        
-        // 过滤结果，优先选择地面或砖块
-        for hit in hitResults {
-            if hit.node.name?.contains("ground") == true || hit.node.name?.hasPrefix("brick_") == true {
-                return hit.worldCoordinates
-            }
+        // 筛选
+        if let topSurfaceHit = hitTestResults.first(where: {
+            ($0.node.name?.contains("ground") == true || $0.node.name?.hasPrefix("brick_") == true) &&
+            $0.worldNormal.y > 0.7
+        }) {
+            return topSurfaceHit.worldCoordinates
         }
-        
-        if direction.y != 0 {
-            let t = -origin.y / direction.y
+
+        let cameraPos = self.cameraNode.worldPosition
+        let unprojectedPointFar = view.unprojectPoint(SCNVector3(location.x, location.y, 0.9))
+
+        let rayDirection = (unprojectedPointFar - cameraPos).normalized()
+
+        // 只有当射线朝下时，才可能与地面相交
+        if rayDirection.y < 0 {
+            let t = -cameraPos.y / rayDirection.y
             if t > 0 {
-                let intersectionPoint = origin + direction * t
+                let intersectionPoint = cameraPos + rayDirection * t
                 
                 // 确保交点在地面范围内
                 let groundHalfWidth = Float(currentGroundWidth) * gridSize / 2.0
@@ -637,7 +588,7 @@ class SceneCoordinator: ObservableObject {
         let x = Int(round(world.x / gridSize))
         let z = Int(round(world.z / gridSize))
         
-        let level = Int(round((world.y - (brickBodyHeight / 2.0)) / brickStackingHeight)) + 1
+        let level = Int(round(world.y / brickStackingHeight))
         return GridPoint(x, level, z)
     }
     
@@ -649,8 +600,8 @@ class SceneCoordinator: ObservableObject {
         
         let effectiveSize = (rotation == 1 || rotation == 3) ? BrickSize(width: size.height, height: size.width) : size
 
-        let centerGridPoint = gridPoint(from: position)
-        let brickGridY = centerGridPoint.y
+        // 砖块占据的Y层级
+        let brickGridY = gridPoint(from: position).y
 
         let startX = position.x - Float(effectiveSize.width - 1) * gridSize / 2.0
         let startZ = position.z - Float(effectiveSize.height - 1) * gridSize / 2.0
@@ -672,12 +623,11 @@ class SceneCoordinator: ObservableObject {
     }
     
     private func getProspectiveOccupiedVolume(for template: BrickTemplate, at position: SCNVector3) -> Set<GridPoint> {
-        // 此函数依赖 `currentRotation`，这对于计算新砖块是正确的
+        
         let size = getEffectiveSize(for: template)
         var occupied = Set<GridPoint>()
         
-        let centerGridPoint = gridPoint(from: position)
-        let brickGridY = centerGridPoint.y
+        let brickGridY = gridPoint(from: position).y
         
         let startX = position.x - Float(size.width - 1) * gridSize / 2.0
         let startZ = position.z - Float(size.height - 1) * gridSize / 2.0
@@ -743,15 +693,14 @@ class SceneCoordinator: ObservableObject {
         if let ground = groundNode {
             let groundSizeW = currentGroundWidth
             let groundSizeL = currentGroundLength
-            let groundSupportLevel = 0
-            
+
             let startX = -Float(groundSizeW - 1) * gridSize / 2.0
             let startZ = -Float(groundSizeL - 1) * gridSize / 2.0
             
             for r in 0..<groundSizeL {
                 for c in 0..<groundSizeW {
                     let worldPos = SCNVector3(startX + Float(c) * gridSize, 0, startZ + Float(r) * gridSize)
-                    let gridKey = GridPoint(Int(round(worldPos.x / gridSize)), groundSupportLevel, Int(round(worldPos.z / gridSize)))
+                    let gridKey = GridPoint(Int(round(worldPos.x / gridSize)), -1, Int(round(worldPos.z / gridSize)))
                     studs[gridKey] = (pos: worldPos, owner: ground)
                 }
             }
@@ -783,61 +732,63 @@ class SceneCoordinator: ObservableObject {
         let newBrickSize = getEffectiveSize(for: template)
         let availableStuds = getAvailableStuds()
         let occupiedVolume = buildSceneOccupationMap()
-        let anchorGridPoint = gridPoint(from: worldPosition)
+
+        var bestCandidate: SCNVector3?
+        var minDistanceSq = Float.infinity
+
+        let searchRadius: Float = 2.0 * gridSize
+        let nearbyStuds = availableStuds.filter { (gridKey, studData) in
+            let distSq = (studData.pos.x - worldPosition.x) * (studData.pos.x - worldPosition.x) +
+                         (studData.pos.z - worldPosition.z) * (studData.pos.z - worldPosition.z)
+            return distSq < searchRadius * searchRadius
+        }
         
-        var closestStudKey: GridPoint? = nil
-        var minDistance = Float.infinity
-        
-        for studKey in availableStuds.keys {
-            let dx = Float(studKey.x - anchorGridPoint.x)
-            let dy = Float(studKey.y - anchorGridPoint.y)
-            let dz = Float(studKey.z - anchorGridPoint.z)
-            let dist = dx*dx + dy*dy + dz*dz
-            if dist < minDistance {
-                minDistance = dist
-                closestStudKey = studKey
+        // 如果附近没有支撑点，则将虚拟地面点加入考虑
+        var allPossibleAnchors = nearbyStuds
+        if nearbyStuds.isEmpty {
+            let snappedX = round(worldPosition.x / gridSize) * gridSize
+            let snappedZ = round(worldPosition.z / gridSize) * gridSize
+            let groundAnchorPos = SCNVector3(snappedX, 0, snappedZ)
+            let groundAnchorKey = GridPoint(Int(round(snappedX/gridSize)), -1, Int(round(snappedZ/gridSize)))
+            if let ground = groundNode {
+                allPossibleAnchors[groundAnchorKey] = (pos: groundAnchorPos, owner: ground)
             }
         }
         
-        guard let targetStudKey = closestStudKey,
-              let (targetStudWorldPos, supportNode) = availableStuds[targetStudKey] else {
-            return nil
-        }
-        
-        for r_offset in 0..<newBrickSize.height {
-            for c_offset in 0..<newBrickSize.width {
-                
-                let startOffsetX = Float(c_offset) * gridSize - Float(newBrickSize.width - 1) * gridSize / 2.0
-                let startOffsetZ = Float(r_offset) * gridSize - Float(newBrickSize.height - 1) * gridSize / 2.0
-                
-                let newBrickX = targetStudWorldPos.x - startOffsetX
-                let newBrickZ = targetStudWorldPos.z - startOffsetZ
-                
-                let newBrickY: Float
-                if supportNode.name == "ground" {
-                    newBrickY = brickBodyHeight / 2.0
-                } else {
-                    let supportBrickTopY = supportNode.position.y + brickBodyHeight / 2.0
-                    newBrickY = supportBrickTopY + brickBodyHeight / 2.0
-                }
-                
-                let candidatePosition = SCNVector3(newBrickX, newBrickY, newBrickZ)
-                
-                let requiredFootprint = getFootprint(for: template, at: candidatePosition)
-                let supportingStuds = requiredFootprint.filter { availableStuds.keys.contains($0) }
-                
-                let allSupported = supportingStuds.count == requiredFootprint.count
-                let sameLevel = supportingStuds.allSatisfy { $0.y == targetStudKey.y }
-
-                if allSupported && sameLevel {
-                    // FIX: 调用重命名后的函数
-                    if occupiedVolume.isDisjoint(with: getProspectiveOccupiedVolume(for: template, at: candidatePosition)) {
-                        return candidatePosition
+        for (targetStudKey, (targetStudWorldPos, _)) in allPossibleAnchors {
+            for r_anchor in 0..<newBrickSize.height {
+                for c_anchor in 0..<newBrickSize.width {
+                    // 计算锚点相对于新积木中心的偏移
+                    let anchorOffsetX = (Float(c_anchor) - Float(newBrickSize.width - 1) / 2.0) * gridSize
+                    let anchorOffsetZ = (Float(r_anchor) - Float(newBrickSize.height - 1) / 2.0) * gridSize
+                    
+                    // 基于支撑点层级计算新砖块的中心高度
+                    let newBrickY = (Float(targetStudKey.y) + 1.0) * brickStackingHeight + brickBodyHeight / 2.0
+                    
+                    let candidatePosition = SCNVector3(
+                        targetStudWorldPos.x - anchorOffsetX,
+                        newBrickY,
+                        targetStudWorldPos.z - anchorOffsetZ
+                    )
+                    
+                    let requiredFootprint = getFootprint(for: template, at: candidatePosition)
+                    let isSupported = requiredFootprint.isSubset(of: Set(availableStuds.keys))
+                    
+                    if isSupported {
+                        if occupiedVolume.isDisjoint(with: getProspectiveOccupiedVolume(for: template, at: candidatePosition)) {
+                            // 位置有效，计算它与用户原始点击点的距离
+                            let distSq = (candidatePosition - worldPosition).lengthSquared
+                            if distSq < minDistanceSq {
+                                minDistanceSq = distSq
+                                bestCandidate = candidatePosition
+                            }
+                        }
                     }
                 }
             }
         }
-        return nil
+
+        return bestCandidate
     }
 
     private func showPlacementFailed(at position: SCNVector3) {
@@ -853,7 +804,6 @@ class SceneCoordinator: ObservableObject {
             material.transparency = 0.5
         }
         
-        // 对所有子节点也应用红色材质
         failedBrick.childNodes.forEach { child in
             child.geometry?.materials.forEach { material in
                 material.diffuse.contents = UIColor.red.withAlphaComponent(0.5)

@@ -57,6 +57,9 @@ struct CustomSceneView: UIViewRepresentable {
         scnView.scene = sceneCoordinator.scene
         scnView.pointOfView = sceneCoordinator.cameraNode
         scnView.allowsCameraControl = true
+        
+        sceneCoordinator.scnView = scnView
+        
         let tapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(context.coordinator.handleTap(_:)))
         scnView.addGestureRecognizer(tapGesture)
         return scnView
@@ -287,13 +290,16 @@ struct CurrentBrickInfoView: View {
                         let impact = UIImpactFeedbackGenerator(style: .light)
                         impact.impactOccurred()
                     }
-                    // 更新虚影位置
-                    sceneCoordinator.handleDragUpdate(at: value.location, with: template)
+                    if let scnView = sceneCoordinator.scnView {
+                        sceneCoordinator.handleDragUpdate(at: value.location, with: template, in: scnView)
+                    }
                 }
                 .onEnded { value in
                     isDragging = false
                     // 处理放置
-                    sceneCoordinator.handleBrickDrop(at: value.location, with: template)
+                    if let scnView = sceneCoordinator.scnView {
+                        sceneCoordinator.handleBrickDrop(at: value.location, with: template, in: scnView)
+                    }
                 }
         )
         .simultaneousGesture(

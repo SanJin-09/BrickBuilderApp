@@ -1,7 +1,7 @@
 import SwiftUI
 import SceneKit
 
-// MARK: - Exrension
+// MARK: - Color Extension
 extension Color {
     init(hex: String) {
         let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
@@ -16,7 +16,7 @@ extension Color {
         case 8:
             (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
         default:
-            (a, r, g, b) = (1, 1, 1, 0)
+            (a, r, g, b) = (255, 0, 0, 0)
         }
 
         self.init(
@@ -29,6 +29,7 @@ extension Color {
     }
 }
 
+// MARK: - Data Model Extensions
 extension BrickColor {
     var displayName: String {
         switch self {
@@ -48,113 +49,129 @@ extension BrickColor {
     }
 }
 
-// MARK: - CustomSceneView
-struct CustomSceneView: UIViewRepresentable {
-    let sceneCoordinator: SceneCoordinator
-
-    func makeUIView(context: Context) -> SCNView {
-        let scnView = SCNView()
-        scnView.scene = sceneCoordinator.scene
-        scnView.pointOfView = sceneCoordinator.cameraNode
-        scnView.allowsCameraControl = true
-        
-        sceneCoordinator.scnView = scnView
-        
-        let tapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(context.coordinator.handleTap(_:)))
-        scnView.addGestureRecognizer(tapGesture)
-        return scnView
+// MARK: - View Extension
+extension View {
+    func cornerRadius(_ radius: CGFloat, corners: UIRectCorner) -> some View {
+        clipShape( RoundedCorner(radius: radius, corners: corners) )
     }
+}
 
-    func updateUIView(_ uiView: SCNView, context: Context) {}
+// MARK: - Helper Shape
+struct RoundedCorner: Shape {
+    var radius: CGFloat = .infinity
+    var corners: UIRectCorner = .allCorners
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(sceneCoordinator: sceneCoordinator)
+    func path(in rect: CGRect) -> Path {
+        let path = UIBezierPath(roundedRect: rect, byRoundingCorners: corners, cornerRadii: CGSize(width: radius, height: radius))
+        return Path(path.cgPath)
     }
+}
 
-    class Coordinator: NSObject {
-        private var sceneCoordinator: SceneCoordinator
-        init(sceneCoordinator: SceneCoordinator) { self.sceneCoordinator = sceneCoordinator }
-        @objc func handleTap(_ gestureRecognize: UIGestureRecognizer) {
-            let scnView = gestureRecognize.view as! SCNView
-            let location = gestureRecognize.location(in: scnView)
-            sceneCoordinator.handleTap(at: location, in: scnView)
-        }
-    }
+// MARK: - Enums
+enum MainTab {
+    case build
+    case saves
 }
 
 // MARK: - ContentView
 struct ContentView: View {
-    // 状态管理
+    
     @StateObject private var sceneCoordinator = SceneCoordinator()
+    
+    @State private var currentTab: MainTab = .build
+    @State private var isSettingsPanelPresented = false
     @State private var showingGroundSettings = false
     @State private var showingBrickSettings = false
-    @State private var showingProjectManager = false
-    
-    // UI颜色常量
-    private let textColor = Color(hex: "#1f2b2e")
     
     var body: some View {
         ZStack {
-            // 3D 场景视图
-            CustomSceneView(sceneCoordinator: sceneCoordinator)
-                .ignoresSafeArea()
-                .gesture(
-                    MagnificationGesture()
-                        .onChanged { value in
-                            sceneCoordinator.handleZoom(value)
-                        }
-                )
-            // UI 界面叠加层
-            uiOverlay
+            mainContent
             
-            // 删除按钮
-            if let pos = sceneCoordinator.deleteButtonPosition {
-                DeleteButton {
-                    sceneCoordinator.deleteSelectedBrick()
-                }
-                .position(pos)
-            }
+            bottomUIOverlay
         }
+        .ignoresSafeArea()
         .sheet(isPresented: $showingGroundSettings) {
             GroundSettingsView(sceneCoordinator: sceneCoordinator)
         }
         .sheet(isPresented: $showingBrickSettings) {
             BrickSettingsView(sceneCoordinator: sceneCoordinator)
         }
-        .sheet(isPresented: $showingProjectManager) { ProjectManagementView(sceneCoordinator: sceneCoordinator) }
         .onDisappear {
-            // 清理选择状态
             sceneCoordinator.deselectBrick()
         }
-        .overlay(toastOverlay)
     }
     
-    // UI 叠加层
+    @ViewBuilder
+    private var mainContent: some View {
+        if currentTab == .build {
+            BuildView(sceneCoordinator: sceneCoordinator)
+        } else {
+            ProjectManagementView(sceneCoordinator: sceneCoordinator)
+        }
+    }
+    
+    @ViewBuilder
+    private var bottomUIOverlay: some View {
+        VStack {
+            Spacer()
+            ZStack(alignment: .bottom) {
+                BottomNavBar(currentTab: $currentTab)
+                
+                ZStack {
+                    if isSettingsPanelPresented {
+                        SettingsPanelView(
+                            showGroundSettings: { showingGroundSettings = true },
+                            showBrickSettings: { showingBrickSettings = true }
+                        )
+                        .offset(y: -120)
+                        .transition(.scale(0.95, anchor: .bottom).combined(with: .opacity))
+                    }
+                    
+                    if currentTab == .build {
+                        SettingsButton(isPresented: $isSettingsPanelPresented)
+                            .offset(y: -42.5)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - BuildView
+struct BuildView: View {
+    @ObservedObject var sceneCoordinator: SceneCoordinator
+    
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            Color(hex: "#FFFFF8").ignoresSafeArea()
+            
+            CustomSceneView(sceneCoordinator: sceneCoordinator)
+                .gesture(
+                    MagnificationGesture()
+                        .onChanged { value in
+                            sceneCoordinator.handleZoom(value)
+                        }
+                )
+                .ignoresSafeArea(.container, edges: .bottom)
+            
+            uiOverlay
+            
+            if let pos = sceneCoordinator.deleteButtonPosition {
+                DeleteButton {
+                    sceneCoordinator.deleteSelectedBrick()
+                }
+                .position(pos)
+            }
+            
+            toastOverlay
+        }
+    }
+    
     private var uiOverlay: some View {
         VStack(spacing: 0) {
-            TopHeaderView(sceneCoordinator: sceneCoordinator, textColor: textColor)
-                .padding(.horizontal)
-                .padding(.top, 10)
-            
+            TopHeaderView(sceneCoordinator: sceneCoordinator)
+                .padding(.top, 60)
             Spacer()
-            
-            HStack(alignment: .bottom) {
-                FloatingActionButton(
-                    icon: "square.grid.3x3.middle.filled",
-                    color: Color(hex: "#267c86"),
-                    action: { showingGroundSettings = true }
-                )
-                Spacer()
-                FloatingActionButton(icon: "folder.fill", color: Color(hex: "#f0ad4e")) { showingProjectManager = true }
-                Spacer()
-                FloatingActionButton(
-                    icon: "shippingbox.fill",
-                    color: Color(hex: "#38c3d3"),
-                    action: { showingBrickSettings = true }
-                )
-            }
-            .padding(.horizontal, 40)
-            .padding(.bottom, 50)
         }
     }
     
@@ -184,109 +201,227 @@ struct ContentView: View {
 // MARK: - TopHeaderView
 struct TopHeaderView: View {
     @ObservedObject var sceneCoordinator: SceneCoordinator
-    let textColor: Color
     
     var body: some View {
         ZStack(alignment: .bottom) {
-            // 弧形背景
-            HeaderArcShape()
-                .fill(Color(hex: "#38c3d3"))
-                .frame(height: 180)
-                .shadow(color: Color(hex: "#267c86").opacity(0.6), radius: 10, x: 0, y: 6)
-                .overlay(
-                    // 弧形内的内容
-                    VStack(spacing: 100) {
-                        if let template = sceneCoordinator.currentBrickTemplate{
-                            CurrentBrickInfoView(
-                                sceneCoordinator: sceneCoordinator,
-                                textColor: textColor,
-                                template: template,
-                            )
-                            .padding(.top, 50)
-                        }
-                        Spacer()
-                    }
-                )
-            // 砖块数量显示
-            BrickCountView(count: sceneCoordinator.brickCount, textColor: textColor)
-                .offset(y: -30)
+            RoundedRectangle(cornerRadius: 32)
+                .fill(Color(hex: "#3A3A3A"))
+                .frame(width: 300, height: 130)
+                .shadow(color: .black.opacity(0.2), radius: 5, x: 0, y: 8)
+
+            VStack {
+                if let template = sceneCoordinator.currentBrickTemplate {
+                    CurrentBrickInfoView(sceneCoordinator: sceneCoordinator, template: template)
+                } else {
+                    Text("未确定当前积木")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(Color(hex: "#FFFFF8"))
+                }
+            }
+            .padding(.bottom, 50)
+
+            BrickCountView(count: sceneCoordinator.brickCount)
+                .offset(y: -10)
         }
-        .ignoresSafeArea()
+    }
+}
+
+// MARK: - BottomNavBar
+struct BottomNavBar: View {
+    @Binding var currentTab: MainTab
+    private let navBarColor = Color(hex: "#FFFFF8")
+    private let itemColor = Color(hex: "#3A3A3A")
+    private let borderColor = Color(hex: "#D6D6D2")
+
+    var body: some View {
+        HStack {
+            Button(action: { currentTab = .build }) {
+                VStack(spacing: 4) {
+                    Image(systemName: "hammer.fill")
+                        .font(.title3)
+                    Text("搭建")
+                        .font(.caption2)
+                }
+                .foregroundColor(itemColor.opacity(currentTab == .build ? 1.0 : 0.5))
+            }
+            
+            Spacer()
+            
+            Button(action: { currentTab = .saves }) {
+                VStack(spacing: 4) {
+                    Image(systemName: "folder.fill")
+                        .font(.title3)
+                    Text("存档")
+                        .font(.caption2)
+                }
+                 .foregroundColor(itemColor.opacity(currentTab == .saves ? 1.0 : 0.5))
+            }
+        }
+        .frame(height: 85)
+        .padding(.horizontal, 50)
+        .background(navBarColor)
+        .cornerRadius(35, corners: [.topLeft, .topRight])
+        .overlay(
+            RoundedCorner(radius: 35, corners: [.topLeft, .topRight])
+                .stroke(borderColor, lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.05), radius: 5, y: -5)
+    }
+}
+
+// MARK: - SettingsButton
+struct SettingsButton: View {
+    @Binding var isPresented: Bool
+    
+    var body: some View {
+        Button(action: {
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                isPresented.toggle()
+            }
+        }) {
+            ZStack {
+                CenterButtonIcon()
+                    .foregroundColor(Color(hex: "#FFFFF8"))
+                    .opacity(isPresented ? 0 : 1)
+                
+                Image(systemName: "xmark")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundColor(Color(hex: "#FFFFF8"))
+                    .opacity(isPresented ? 1 : 0)
+            }
+            .frame(width: 60, height: 60)
+            .background(Color(hex: "#3A3A3A"))
+            .clipShape(Circle())
+            .shadow(color: .black.opacity(0.15), radius: 5, y: 2)
+            .rotationEffect(.degrees(isPresented ? 90 : 0))
+        }
+    }
+}
+
+// MARK: - CenterButtonIcon
+struct CenterButtonIcon: View {
+    var body: some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 4) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .black))
+                Image(systemName: "triangle.fill")
+                    .font(.system(size: 9))
+            }
+            HStack(spacing: 4) {
+                Circle().stroke(lineWidth: 2).frame(width: 10, height: 10)
+                Rectangle().stroke(lineWidth: 2).frame(width: 10, height: 10)
+            }
+        }
+    }
+}
+
+// MARK: - SettingsPanelView
+struct SettingsPanelView: View {
+    let showGroundSettings: () -> Void
+    let showBrickSettings: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 25) {
+            Button(action: showGroundSettings) {
+                HStack(spacing: 15) {
+                    Image(systemName: "square.grid.3x3.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .frame(width: 25)
+                    Text("地面设置")
+                        .font(.system(size: 16, weight: .bold))
+                    Spacer()
+                }
+            }
+            
+            Button(action: showBrickSettings) {
+                HStack(spacing: 15) {
+                    Image(systemName: "hexagon.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .frame(width: 25)
+                    Text("积木设置")
+                        .font(.system(size: 16, weight: .bold))
+                    Spacer()
+                }
+            }
+            Spacer()
+        }
+        .padding(.top, 40)
+        .padding(.horizontal, 20)
+        .frame(width: 180, height: 200)
+        .background(Color(hex: "#3A3A3A"))
+        .foregroundColor(Color(hex: "#FFFFF8"))
+        .cornerRadius(32)
+        .shadow(color: .black.opacity(0.25), radius: 4, x: 0, y: 0)
+    }
+}
+
+// MARK: - CustomSceneView
+struct CustomSceneView: UIViewRepresentable {
+    let sceneCoordinator: SceneCoordinator
+    func makeUIView(context: Context) -> SCNView {
+        let scnView = SCNView()
+        scnView.scene = sceneCoordinator.scene
+        scnView.pointOfView = sceneCoordinator.cameraNode
+        scnView.allowsCameraControl = true
+        sceneCoordinator.scnView = scnView
+        let tapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(context.coordinator.handleTap(_:)))
+        scnView.addGestureRecognizer(tapGesture)
+        return scnView
+    }
+    func updateUIView(_ uiView: SCNView, context: Context) {}
+    func makeCoordinator() -> Coordinator { Coordinator(sceneCoordinator: sceneCoordinator) }
+    class Coordinator: NSObject {
+        private var sceneCoordinator: SceneCoordinator
+        init(sceneCoordinator: SceneCoordinator) { self.sceneCoordinator = sceneCoordinator }
+        @objc func handleTap(_ gestureRecognize: UIGestureRecognizer) {
+            let scnView = gestureRecognize.view as! SCNView
+            let location = gestureRecognize.location(in: scnView)
+            sceneCoordinator.handleTap(at: location, in: scnView)
+        }
     }
 }
 
 // MARK: - CurrentBrickInfoView
 struct CurrentBrickInfoView: View {
-    
     @ObservedObject var sceneCoordinator: SceneCoordinator
     @State private var isDragging = false
-    
-    let textColor: Color
     let template: BrickTemplate
     
+    private let textColor = Color(hex: "#FFFFF8")
+
     var body: some View {
-        VStack(spacing: 5) {
-            Text("当前砖块")
-                .font(.caption)
-                .foregroundColor(textColor.opacity(0.7))
-            Text("拖动以放置")
-                .font(.caption)
-                .foregroundColor(textColor.opacity(0.7))
-            HStack(spacing: 15) {
-                // 砖块信息和预览
-                HStack(spacing: 12) {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color(template.color.uiColor))
-                        .frame(width: 50, height: 50)
-                        .overlay(
-                            // 传入旋转状态
-                            StudsPatternView(
-                                size: template.size,
-                                rotation: sceneCoordinator.currentRotation
-                            )
-                        )
-                    
-                    VStack(alignment: .leading) {
-                        Text(template.size.displayName)
-                            .font(.headline)
-                            .fontWeight(.bold)
-                            .foregroundColor(textColor)
-                        Text(template.color.displayName)
-                            .font(.subheadline)
-                            .foregroundColor(textColor.opacity(0.8))
-                    }
-                }
-                
-                // 分隔线
-                Rectangle()
-                    .fill(Color(hex: "#c4d1d3").opacity(0.5))
-                    .frame(width: 1, height: 40)
-                
-                // 旋转按钮
-                Button(action: {
-                    // 触觉反馈
-                    let impact = UIImpactFeedbackGenerator(style: .medium)
-                    impact.impactOccurred()
-                    sceneCoordinator.rotateCurrentBrick()
-                }) {
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                        .font(.title)
-                        .foregroundColor(textColor)
-                        .frame(width: 44, height: 44)
+        HStack(spacing: 15) {
+            HStack(spacing: 12) {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(template.color.uiColor))
+                    .frame(width: 50, height: 50)
+                    .overlay(StudsPatternView(size: template.size, rotation: sceneCoordinator.currentRotation))
+                VStack(alignment: .leading) {
+                    Text(template.size.displayName)
+                        .font(.headline).fontWeight(.bold).foregroundColor(textColor)
+                    Text(template.color.displayName)
+                        .font(.subheadline).foregroundColor(textColor.opacity(0.8))
                 }
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 10)
+            
+            Rectangle().fill(textColor.opacity(0.5)).frame(width: 1, height: 40)
+            
+            Button(action: {
+                let impact = UIImpactFeedbackGenerator(style: .medium)
+                impact.impactOccurred()
+                sceneCoordinator.rotateCurrentBrick()
+            }) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.title).foregroundColor(textColor).frame(width: 44, height: 44)
+            }
         }
-        .background(Color(hex: "#effbfd"))
-        .cornerRadius(15)
-        .shadow(color: Color(hex: "#c4d1d3"), radius: 8, x: 0, y: 4)
+        .padding(.horizontal, 10).padding(.vertical, 5)
         .gesture(
             DragGesture(coordinateSpace: .global)
                 .onChanged { value in
                     if !isDragging {
                         isDragging = true
-                        // 触觉反馈
                         let impact = UIImpactFeedbackGenerator(style: .light)
                         impact.impactOccurred()
                     }
@@ -296,35 +431,27 @@ struct CurrentBrickInfoView: View {
                 }
                 .onEnded { value in
                     isDragging = false
-                    // 处理放置
                     if let scnView = sceneCoordinator.scnView {
                         sceneCoordinator.handleBrickDrop(at: value.location, with: template, in: scnView)
                     }
                 }
         )
-        .simultaneousGesture(
-            // 添加取消手势处理
-            TapGesture()
-                .onEnded { _ in
-                    if isDragging {
-                        isDragging = false
-                        sceneCoordinator.handleDragCancel()
-                    }
-                }
-        )
+        .simultaneousGesture(TapGesture().onEnded { _ in
+            if isDragging {
+                isDragging = false
+                sceneCoordinator.handleDragCancel()
+            }
+        })
     }
 }
 
+// MARK: - DeleteButton
 struct DeleteButton: View {
     let action: () -> Void
-    
     var body: some View {
         Button(action: action) {
             Image(systemName: "trash.circle.fill")
-                .font(.largeTitle)
-                .symbolRenderingMode(.palette)
-                .foregroundStyle(.white, .red)
-                .shadow(radius: 5)
+                .font(.largeTitle).symbolRenderingMode(.palette).foregroundStyle(.white, .red).shadow(radius: 5)
         }
         .transition(.scale.animation(.spring()))
     }
@@ -333,40 +460,18 @@ struct DeleteButton: View {
 // MARK: - BrickCountView
 struct BrickCountView: View {
     let count: Int
-    let textColor: Color
     
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "shippingbox.circle.fill")
-            Text("砖块数: \(count)")
+            Text("积木数: \(count)")
         }
-        .font(.footnote)
-        .fontWeight(.medium)
-        .foregroundColor(textColor)
-        .padding(.horizontal, 15)
-        .padding(.vertical, 8)
-        .background(Color(hex: "#effbfd"))
-        .cornerRadius(20)
-        .shadow(color: Color(hex: "#267c86").opacity(0.7), radius: 5, x: 0, y: 3)
-    }
-}
-
-// MARK: - FloatingActionButton
-struct FloatingActionButton: View {
-    let icon: String
-    let color: Color
-    let action: () -> Void
-    
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.title2)
-                .foregroundColor(.white)
-                .frame(width: 64, height: 64)
-                .background(color)
-                .clipShape(Circle())
-                .shadow(color: color.opacity(0.5), radius: 10, x: 0, y: 5)
-        }
+        .font(.footnote).fontWeight(.medium)
+        .foregroundColor(Color(hex: "#3A3A3A"))
+        .padding(.horizontal, 15).padding(.vertical, 8)
+        .background(Color(hex: "#FFFFF8"))
+        .clipShape(Capsule())
+        .shadow(color: Color.black.opacity(0.1), radius: 3, x: 0, y: 2)
     }
 }
 
@@ -374,18 +479,13 @@ struct FloatingActionButton: View {
 struct StudsPatternView: View {
     let size: BrickSize
     let rotation: Int
-    
     var body: some View {
-        let effectiveSize = (rotation == 1 || rotation == 3) ?
-            BrickSize(width: size.height, height: size.width) : size
-        
+        let effectiveSize = (rotation == 1 || rotation == 3) ? BrickSize(width: size.height, height: size.width) : size
         VStack(spacing: 3) {
             ForEach(0..<effectiveSize.height, id: \.self) { _ in
                 HStack(spacing: 3) {
                     ForEach(0..<effectiveSize.width, id: \.self) { _ in
-                        Circle()
-                            .fill(Color.white.opacity(0.5))
-                            .frame(width: 6, height: 6)
+                        Circle().fill(Color.white.opacity(0.5)).frame(width: 6, height: 6)
                     }
                 }
             }
@@ -393,23 +493,6 @@ struct StudsPatternView: View {
     }
 }
 
-// MARK: - HeaderArcShape
-struct HeaderArcShape: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        
-        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - 40))
-        path.addQuadCurve(
-            to: CGPoint(x: rect.minX, y: rect.maxY - 40),
-            control: CGPoint(x: rect.midX, y: rect.maxY)
-        )
-        path.closeSubpath()
-        
-        return path
-    }
-}
 
 #Preview {
     ContentView()

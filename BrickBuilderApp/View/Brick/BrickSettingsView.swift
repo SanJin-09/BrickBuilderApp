@@ -10,7 +10,7 @@ struct BrickSettingsView: View {
     var body: some View {
         NavigationView {
             VStack(spacing: 20) {
-                Text("砖块设置")
+                Text("积木设置")
                     .font(.title2)
                     .fontWeight(.bold)
                     .padding(.top)

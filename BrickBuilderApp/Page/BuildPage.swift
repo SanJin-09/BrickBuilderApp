@@ -2,33 +2,6 @@ import SwiftUI
 import SceneKit
 
 // MARK: - Extensions
-extension Color {
-    init(hex: String) {
-        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-        var int: UInt64 = 0
-        Scanner(string: hex).scanHexInt64(&int)
-        let a, r, g, b: UInt64
-        switch hex.count {
-        case 3:
-            (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
-        case 6:
-            (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
-        case 8:
-            (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
-        default:
-            (a, r, g, b) = (255, 0, 0, 0)
-        }
-
-        self.init(
-            .sRGB,
-            red: Double(r) / 255,
-            green: Double(g) / 255,
-            blue:  Double(b) / 255,
-            opacity: Double(a) / 255
-        )
-    }
-}
-
 extension BrickColor {
     var displayName: String {
         switch self {
@@ -52,6 +25,9 @@ extension BrickColor {
 struct BuildPage: View {
     
     @ObservedObject var sceneCoordinator: SceneCoordinator
+    
+    let showGroundSettings: () -> Void
+    let showBrickSettings: () -> Void
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -69,10 +45,26 @@ struct BuildPage: View {
             TopInfoComponent(sceneCoordinator: sceneCoordinator)
             
             // 3.渲染中央菜单按钮
-            MenuButtonComponent()
+            MenuButtonComponent(sceneCoordinator: sceneCoordinator,
+                                showGroundSettings: showGroundSettings,
+                                showBrickSettings: showBrickSettings
+            )
+            
+            // 4.渲染删除按钮
+            if let pos = sceneCoordinator.deleteButtonPosition {
+                DeleteButton {
+                    sceneCoordinator.deleteSelectedBrick()
+                }
+                .position(pos)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color(hex: "#FFFFF8"))
+        
+        // 积木删除
+        .onDisappear {
+            sceneCoordinator.deselectBrick()
+        }
     }
 }
 
@@ -103,11 +95,11 @@ struct CustomSceneComponent: UIViewRepresentable {
 }
 
 struct TopInfoComponent: View {
-    let sceneCoordinator: SceneCoordinator
+    @ObservedObject var sceneCoordinator: SceneCoordinator
     var body: some View {
         // 1.顶部视图
-        VStack(spacing: 0.0) {
-            VStack {
+        VStack{
+            VStack(spacing: 10){
                 // 1.1 当前积木视图
                 VStack{
                     if let template = sceneCoordinator.currentBrickTemplate {
@@ -118,8 +110,8 @@ struct TopInfoComponent: View {
                             .foregroundColor(Color(hex: "#FFFFF8"))
                     }
                 }
-                .padding(.top, 50)
-                .padding(.bottom, 20)
+                .padding(.top, 40)
+                .padding(.bottom, 10)
                 
                 // 1.2 积木计数器
                 BrickCountComponent(count: sceneCoordinator.brickCount)
@@ -142,7 +134,7 @@ struct CurrentBrickInfoComponent: View {
     private let textColor = Color(hex: "#FFFFF8")
 
     var body: some View {
-        HStack(spacing: 15) {
+        HStack(spacing: 5) {
             HStack(spacing: 12) {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color(template.color.uiColor))
@@ -167,7 +159,7 @@ struct CurrentBrickInfoComponent: View {
                     .font(.title).foregroundColor(textColor).frame(width: 44, height: 44)
             }
         }
-        .padding(.horizontal, 10).padding(.vertical, 5)
+        .padding(.horizontal, 10)
         .gesture(
             DragGesture(coordinateSpace: .global)
                 .onChanged { value in
@@ -198,11 +190,16 @@ struct CurrentBrickInfoComponent: View {
 
 struct MenuButtonComponent: View {
     
+    @ObservedObject var sceneCoordinator: SceneCoordinator
+    
     @State private var translateY: Double = 0.0
     @State private var cornerRadius: Double = 100.0
     @State private var hidden: Bool = false
     @State private var width: Double = 70.0
     @State private var height: Double = 70.0
+    
+    let showGroundSettings: () -> Void
+    let showBrickSettings: () -> Void
 
     var body: some View {
         ZStack {}
@@ -225,7 +222,10 @@ struct MenuButtonComponent: View {
                                 
                                 if hidden {
                                     // 地面设置按钮
-                                    Button(action: {}) {
+                                    Button(action: {
+                                        showGroundSettings()
+                                        collapseAnim()
+                                    }) {
                                         HStack(spacing: 8.0) {
                                             Image(systemName: "square.grid.3x3.middle.filled")
                                                 .font(.system(size: 26.0))
@@ -241,7 +241,10 @@ struct MenuButtonComponent: View {
                                     .tint(Color(hex: "#3A3A3A"))
                                     
                                     // 积木设置按钮
-                                    Button(action: {}) {
+                                    Button(action: {
+                                        showBrickSettings()
+                                        collapseAnim()
+                                    }) {
                                         HStack(spacing: 8.0) {
                                             Image(systemName: "shippingbox.fill")
                                                 .font(.system(size: 26.0))
@@ -264,7 +267,7 @@ struct MenuButtonComponent: View {
                                     .opacity(hidden ? 0:1)
                             }
                             .frame(width: width, height: height, alignment: .center)
-                            .background(Color(hex: "#3A3A3A"), ignoresSafeAreaEdges: [])
+                            .background(Color(hex: "#3A3A3A"))
                             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .circular))
                             .shadow(color: Color(red: 0.0, green: 0.0, blue: 0.0, opacity: 0.75), radius: 2.0, y: 2.0)
                             .offset(y: geometry.size.height * 0.18 + translateY)
@@ -327,7 +330,6 @@ struct DeleteButton: View {
             Image(systemName: "trash.circle.fill")
                 .font(.largeTitle).symbolRenderingMode(.palette).foregroundStyle(.white, .red).shadow(radius: 5)
         }
-        .transition(.scale.animation(.spring()))
     }
 }
 

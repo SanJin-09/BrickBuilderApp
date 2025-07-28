@@ -6,19 +6,57 @@ enum MainTab {
     case savesPage
 }
 
+extension Color {
+    var hsb: (hue: CGFloat, saturation: CGFloat, brightness: CGFloat, alpha: CGFloat) {
+        var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        UIColor(self).getHue(&h, saturation: &s, brightness: &b, alpha: &a)
+        return (h, s, b, a)
+    }
+
+    init(hex: String) {
+        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var int: UInt64 = 0
+        Scanner(string: hex).scanHexInt64(&int)
+        let a, r, g, b: UInt64
+        switch hex.count {
+        case 3:
+            (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
+        case 6:
+            (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
+        case 8:
+            (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
+        default:
+            (a, r, g, b) = (255, 0, 0, 0)
+        }
+        self.init(.sRGB, red: Double(r) / 255, green: Double(g) / 255, blue: Double(b) / 255, opacity: Double(a) / 255)
+    }
+}
+
 // MARK: - View
 struct ContentView: View{
+    
+    enum PresentedSheet {
+        case ground, blocks
+    }
     
     @StateObject private var sceneCoordinator = SceneCoordinator()
     
     @State private var currentTab: MainTab = .buildPage
     @State private var isSettingsPanelPresented = false
+    @State private var sheetToPresent: PresentedSheet?
+    
+    @State private var showingGroundSettings = false
+    @State private var showingBrickSettings = false
+
     
     var body: some View{
         ZStack(alignment: .top) {
             // 根据当前选择展示页面，默认buildPage为主页面
             if currentTab == .buildPage {
-                BuildPage(sceneCoordinator: sceneCoordinator)
+                BuildPage(sceneCoordinator: sceneCoordinator,
+                          showGroundSettings:{showingGroundSettings = true},
+                          showBrickSettings:{showingBrickSettings = true}
+                )
             }else if currentTab == .savesPage {
                 SavesPage()
             }
@@ -29,6 +67,14 @@ struct ContentView: View{
                 BottomNavbarComponent(currentTab: $currentTab)
             }
             .ignoresSafeArea()
+            
+            // 其他设置页面
+            .fullScreenCover(isPresented: $showingGroundSettings) {
+                GroundSettingPage(sceneCoordinator: sceneCoordinator)
+            }
+            .fullScreenCover(isPresented: $showingBrickSettings) {
+                BrickSelectingPage()
+            }
         }
     }
 }
@@ -98,9 +144,9 @@ struct BottomNavbarComponent: View {
                             .frame(height: 150.0, alignment: .top)
                             .background(navBarColor, ignoresSafeAreaEdges: [])
                             .clipShape(
-                                RoundedRectangle(cornerRadius: 32.0, style: .circular))
+                                RoundedRectangle(cornerRadius: 40.0, style: .circular))
                             .overlay {
-                                RoundedRectangle(cornerRadius: 32.0, style: .circular)
+                                RoundedRectangle(cornerRadius: 40.0, style: .circular)
                                     .stroke(borderColor)
                             }
                             .offset(y: geometry.size.height * 0.4)

@@ -15,7 +15,8 @@ struct SavedBrick: Codable {
 struct SavedProject: Codable {
     let groundWidth: Int
     let groundLength: Int
-    let groundColor: GroundColor
+    let groundHeight: Double
+    let groundColorHex: String
     let bricks: [SavedBrick]
     let cameraZoom: Float
     let cameraPosition: [Float]

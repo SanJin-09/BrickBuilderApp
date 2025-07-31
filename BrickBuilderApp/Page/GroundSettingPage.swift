@@ -7,14 +7,15 @@ struct GroundSettingPage: View {
     @Environment(\.dismiss) private var dismiss
     
     @State var groundLength: Double = 8
+    @State var groundHeight: Double = 0.3
     @State private var isSheet: Bool = true
-    @State private var selectedColor: Color = .red
-    @State private var colorHistory: [Color] = [.red, .green, .blue, .yellow, .purple]
+    @State private var selectedColor: Color = .gray
+    @State private var myColor: [Color] = []
     
     private let MAIN_BG_COLOR = Color(hex: "#FFFFF8")
     private let MAIN_CARD_COLOR = Color(hex: "#3A3A3A")
     private let SECONDARY_TEXT_COLOR = Color(hex: "#C2C2BB")
-    private let DIVIDER_COLOR = Color(hex: "#AAAAAA").opacity(0.4)
+    private let DIVIDER_COLOR = Color(hex: "#AAAAAA")
 
     // MARK: - Page
     var body: some View {
@@ -29,6 +30,9 @@ struct GroundSettingPage: View {
                     
                     // 地面颜色设置
                     colorSettingsCard
+                    
+                    // 确认按钮
+                    ensureButton
                     
                     Spacer()
                 }
@@ -91,7 +95,7 @@ struct GroundSettingPage: View {
                 Spacer()
             }
             
-            // 调色板与历史记录
+            // 调色板
             VStack(spacing: 20) {
                 ColorPickerView(selectedColor: $selectedColor)
                     .frame(height: 200)
@@ -101,38 +105,53 @@ struct GroundSettingPage: View {
                 VStack(spacing: 15) {
                     HStack {
                         Text("当前颜色")
-                            .font(.headline)
+                            .font(.system(size: 20, weight: .bold))
                             .foregroundColor(MAIN_BG_COLOR)
                         Spacer()
                         RoundedRectangle(cornerRadius: 8)
                             .fill(selectedColor)
                             .frame(width: 50, height: 50)
                             .overlay(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .stroke(Color.white.opacity(0.5), lineWidth: 1)
+                                RoundedRectangle(cornerRadius: 8, style: .circular)
+                                    .stroke(Color(MAIN_BG_COLOR), lineWidth: 3.0)
                             )
                     }
                     
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("历史颜色")
-                            .font(.headline)
-                            .foregroundColor(MAIN_BG_COLOR)
+                        HStack{
+                            Text("我的颜色")
+                                .font(.system(size: 20, weight: .bold))
+                                .foregroundColor(MAIN_BG_COLOR)
+                            
+                            Button(action: {
+                                myColor.append(selectedColor)
+                            }){
+                                Image(systemName: "plus.app.fill")
+                                    .font(.system(size: 18.0))
+                                    .imageScale(.small)
+                            }
+                            .buttonBorderShape(.capsule)
+                            .tint(Color(red: 1.0, green: 1.0, blue: 0.96676))
+                        }
+                        .frame(alignment: .center)
                         
+                        // 为队列中的美中颜色创建色卡
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack {
-                                ForEach(colorHistory, id: \.self) { color in
+                                ForEach(myColor, id: \.self) { color in
                                     RoundedRectangle(cornerRadius: 6)
                                         .fill(color)
                                         .frame(width: 35, height: 35)
                                         .overlay(
-                                            RoundedRectangle(cornerRadius: 6)
-                                                .stroke(Color.white.opacity(0.5), lineWidth: 1)
+                                            RoundedRectangle(cornerRadius: 6, style: .circular)
+                                                .stroke(Color(MAIN_BG_COLOR), lineWidth: 3.0)
                                         )
                                         .onTapGesture {
                                             self.selectedColor = color
                                         }
                                 }
                             }
+                            .frame(height: 60, alignment: .center)
                         }
                     }
                 }
@@ -143,10 +162,43 @@ struct GroundSettingPage: View {
             .shadow(color: .black.opacity(0.5), radius: 3, y: 3)
         }
     }
+    
+    private var ensureButton: some View {
+        VStack{
+            Button(action: {
+                // 根据是否选择薄板地面设置地面高度
+                if !isSheet {
+                    groundHeight = 0.6
+                }
+                
+                // 更新地面
+                sceneCoordinator.updateGround(
+                    width: Int(groundLength),
+                    length: Int(groundLength),
+                    height: groundHeight,
+                    color: UIColor(selectedColor)
+                )
+                
+                // 关闭页面
+                dismiss()
+            }) {
+                HStack(spacing: 4.0) {
+                    Image(systemName: "checkmark.circle")
+                        .font(.system(size: 32.0))
+                }
+                .frame(width: 50.0, height: 50.0)
+            }
+            .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.circle)
+            .shadow(color: .black.opacity(0.5), radius: 3, y: 3)
+            .tint(.green)
+        }
+    }
 }
 
 
 private struct ColorPickerView: View {
+    
     @Binding var selectedColor: Color
     @State private var hue: CGFloat = 0.0
     
@@ -166,14 +218,12 @@ private struct ColorPickerSquare: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                // Background representing saturation and brightness for the current hue
                 Color(hue: hue, saturation: 1.0, brightness: 1.0)
                 
                 LinearGradient(gradient: Gradient(colors: [.white, .clear]), startPoint: .leading, endPoint: .trailing)
                 
                 LinearGradient(gradient: Gradient(colors: [.clear, .black]), startPoint: .top, endPoint: .bottom)
                 
-                // Draggable picker circle
                 Circle()
                     .stroke(Color.white, lineWidth: 2)
                     .frame(width: 20, height: 20)
@@ -187,11 +237,9 @@ private struct ColorPickerSquare: View {
                     }
             )
             .onAppear {
-                // Set initial picker position based on the selected color
                 updatePickerPosition(from: selectedColor, in: geometry.size)
             }
             .onChange(of: selectedColor) {
-                // Update picker position if the color is changed externally (e.g., from history)
                 updatePickerPosition(from: selectedColor, in: geometry.size)
             }
         }
@@ -212,7 +260,6 @@ private struct ColorPickerSquare: View {
     
     private func updatePickerPosition(from color: Color, in size: CGSize) {
         let hsb = color.hsb
-        // Only update position if hue matches, to avoid jumping when hue slider is used
         if abs(hsb.hue - hue) < 0.01 {
             pickerPosition = CGPoint(
                 x: hsb.saturation * size.width,
@@ -239,7 +286,7 @@ private struct HueSlider: View {
                     .fill(Color.white)
                     .frame(width: 24, height: 24)
                     .overlay(Circle().stroke(Color.black.opacity(0.2), lineWidth: 1))
-                    .offset(y: (hue * geometry.size.height) - 12) // Center the handle
+                    .offset(y: (hue * geometry.size.height) - 12)
             }
             .gesture(
                 DragGesture(minimumDistance: 0)
@@ -251,8 +298,4 @@ private struct HueSlider: View {
         }
         .frame(width: 25)
     }
-}
-
-#Preview {
-    ContentView()
 }

@@ -55,10 +55,11 @@ class SceneCoordinator: ObservableObject {
     @Published var deleteButtonPosition: CGPoint?
     @Published var projectMessage: String?
     
-    // 动态地面尺寸
+    // 动态地面尺寸和颜色
     private var currentGroundWidth: Int = 8
     private var currentGroundLength: Int = 8
-    private var currentGroundColor: GroundColor = .gray
+    private var currentGroundHeight: Double = 0.3
+    private var currentGroundColor: UIColor = .gray
     
     // 相机缩放控制
     private var initialCameraPosition: SCNVector3 = SCNVector3(x: 0, y: 8, z: 15)
@@ -80,7 +81,6 @@ class SceneCoordinator: ObservableObject {
     }
     
     // MARK: - Scene Setup
-    
     private func setupScene() {
         scene.background.contents = [
             UIColor.systemBlue.withAlphaComponent(0.3),
@@ -135,7 +135,7 @@ class SceneCoordinator: ObservableObject {
     }
     
     private func setupGround() {
-        updateGround(width: 8, length: 8, color: .gray)
+        updateGround(width: 8, length: 8, height: 0.3, color: .gray)
     }
     
     private func clearScene() {
@@ -172,7 +172,8 @@ class SceneCoordinator: ObservableObject {
         let project = SavedProject(
             groundWidth: currentGroundWidth,
             groundLength: currentGroundLength,
-            groundColor: currentGroundColor,
+            groundHeight: currentGroundHeight,
+            groundColorHex: currentGroundColor.toHex() ?? "#808080",
             bricks: savedBricks,
             cameraZoom: currentZoom,
             cameraPosition: [cameraNode.position.x, cameraNode.position.y, cameraNode.position.z],
@@ -202,7 +203,9 @@ class SceneCoordinator: ObservableObject {
             let project = try persistenceManager.load(fromName: name)
             
             clearScene()
-            updateGround(width: project.groundWidth, length: project.groundLength, color: project.groundColor)
+            
+            let groundColor = colorFrom(hex: project.groundColorHex)
+            updateGround(width: project.groundWidth, length: project.groundLength, height: project.groundHeight, color: groundColor)
             
             for savedBrick in project.bricks {
                 let color = BrickColor.from(hex: savedBrick.colorHex)
@@ -249,22 +252,42 @@ class SceneCoordinator: ObservableObject {
         }
     }
     
+    private func colorFrom(hex: String) -> UIColor {
+        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var int = UInt64()
+        Scanner(string: hex).scanHexInt64(&int)
+        let a, r, g, b: UInt64
+        switch hex.count {
+        case 3: // RGB (12-bit)
+            (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
+        case 6: // RGB (24-bit)
+            (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
+        case 8: // ARGB (32-bit)
+            (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
+        default:
+            (a, r, g, b) = (255, 128, 128, 128) // Default to gray
+        }
+        return UIColor(red: CGFloat(r) / 255, green: CGFloat(g) / 255, blue: CGFloat(b) / 255, alpha: CGFloat(a) / 255)
+    }
+    
     // MARK: - Ground Management
-    public func updateGround(width: Int, length: Int, color: GroundColor) {
+    public func updateGround(width: Int, length: Int, height: Double, color: UIColor) {
         
         // 更新当前地面尺寸
         currentGroundWidth = width
         currentGroundLength = length
+        currentGroundHeight = height
+        currentGroundColor = color
         
         // 移除旧的节点
         groundNode?.removeFromParentNode()
         physicalGroundNode?.removeFromParentNode()
 
-        groundNode = createBaseplate(width: width, length: length, color: color)
+        groundNode = createBaseplate(width: width, length: length, height: height, color: color)
         groundNode?.name = "ground"
         scene.rootNode.addChildNode(groundNode!)
 
-        let plateHeight: CGFloat = 0.6
+        let plateHeight: CGFloat = height
         let plateWidth = CGFloat(width) * CGFloat(gridSize)
         let plateLength = CGFloat(length) * CGFloat(gridSize)
         
@@ -279,15 +302,15 @@ class SceneCoordinator: ObservableObject {
         scene.rootNode.addChildNode(physicalGroundNode!)
     }
     
-    private func createBaseplate(width: Int, length: Int, color: GroundColor) -> SCNNode {
+    private func createBaseplate(width: Int, length: Int, height: Double, color: UIColor) -> SCNNode {
         
-        let plateHeight: CGFloat = 0.6
+        let plateHeight: CGFloat = height
         let plateWidth = CGFloat(width) * CGFloat(gridSize)
         let plateLength = CGFloat(length) * CGFloat(gridSize)
         
         let plateGeometry = SCNBox(width: plateWidth, height: plateHeight, length: plateLength, chamferRadius: 0.05)
         let plateMaterial = SCNMaterial()
-        plateMaterial.diffuse.contents = color.uiColor
+        plateMaterial.diffuse.contents = color
         plateMaterial.specular.contents = UIColor.white
         plateGeometry.materials = [plateMaterial]
         
@@ -299,7 +322,7 @@ class SceneCoordinator: ObservableObject {
         return plateNode
     }
     
-    private func addStudsToBaseplate(_ plateNode: SCNNode, width: Int, length: Int, color: GroundColor, plateHeight: CGFloat) {
+    private func addStudsToBaseplate(_ plateNode: SCNNode, width: Int, length: Int, color: UIColor, plateHeight: CGFloat) {
         
         let studRadius: CGFloat = 0.25
         let studHeight: CGFloat = 0.15
@@ -312,7 +335,7 @@ class SceneCoordinator: ObservableObject {
                 for col in 0..<width {
                     let studGeometry = SCNCylinder(radius: studRadius, height: studHeight)
                     let studMaterial = SCNMaterial()
-                    studMaterial.diffuse.contents = color.uiColor
+                    studMaterial.diffuse.contents = color
                     studMaterial.specular.contents = UIColor.white
                     studGeometry.materials = [studMaterial]
                     
